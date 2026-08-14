@@ -9,7 +9,8 @@ function bill(id: string, dueDate: string): Bill {
     due: dueDate, dueLong: dueDate, value: "R$ 100,00", status: "Pendente", databaseStatus: "pending",
     tone: "neutral", initials: "BL", amountCents: 10000, dueDate, lateFeePercent: 0,
     monthlyInterestPercent: 0, costCenter: "", notes: "", approvalStatus: "pending", paidAt: null,
-    createdAt: "2026-08-14T10:00:00Z", attachmentPath: null,
+    createdAt: "2026-08-14T10:00:00Z", attachmentPath: null, paymentReceiptPath: null,
+    paymentReceiptName: "", paymentReceiptMimeType: "", paymentReceiptUploadedAt: null,
   };
 }
 

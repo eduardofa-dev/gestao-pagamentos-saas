@@ -24,6 +24,7 @@ import {
   type NewCheckInput,
 } from "../lib/check-data";
 import {
+  createPaymentReceiptSignedUrl,
   createBillPdfSignedUrl,
   createLocalBill,
   createWorkspace,
@@ -32,12 +33,14 @@ import {
   loadBills,
   loadWorkspace,
   markBillPaid,
+  persistBulkReminder,
   persistReminder,
   roleLabel,
   updateFinanceContact,
   updateGroupName,
   updateProfileSettings,
   uploadBillPdf,
+  uploadPaymentReceipt,
   type Bill,
   type CompanyOption,
   type FinanceContactInput,
@@ -45,6 +48,7 @@ import {
   type ProfileSettingsInput,
   type WorkspaceContext,
 } from "../lib/finance-data";
+import { canMarkBillPaid, validatePaymentReceipt } from "../lib/payment-receipt";
 import { formatCnpj, normalizeCnpj, parseBillPdfText } from "../lib/boleto-parser";
 import { readPdfText } from "../lib/pdf-reader";
 import { exportBillsToExcel } from "../lib/bill-export";
@@ -55,6 +59,7 @@ import {
   formatWhatsAppPhone,
   isValidWhatsAppPhone,
   normalizeWhatsAppPhone,
+  renderBulkReminderMessage,
   renderReminderTemplate,
 } from "../lib/whatsapp";
 import { createSupabaseBrowserClient } from "../lib/supabase/client";
@@ -284,11 +289,13 @@ export default function Home() {
   const [newCheckOpen, setNewCheckOpen] = useState(false);
   const [editingCheck, setEditingCheck] = useState<CheckRecord | null>(null);
   const [reminderBill, setReminderBill] = useState<Bill | null>(null);
+  const [bulkReminderBills, setBulkReminderBills] = useState<Bill[]>([]);
   const [reminderCheck, setReminderCheck] = useState<CheckRecord | null>(null);
   const [detailBill, setDetailBill] = useState<Bill | null>(null);
   const [toast, setToast] = useState("");
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("Todos");
+  const [selectedBillIds, setSelectedBillIds] = useState<string[]>([]);
   const [bills, setBills] = useState<Bill[]>(supabaseConfigured ? [] : initialBills);
   const [checks, setChecks] = useState<CheckRecord[]>(supabaseConfigured ? [] : initialChecks);
 
@@ -399,6 +406,27 @@ export default function Home() {
     setReminderBill(bill);
   }
 
+  function openBulkReminder() {
+    if (workspace.role !== "admin") {
+      showToast("Somente o administrador pode preparar lembretes");
+      return;
+    }
+    if (!workspace.financeContactName || !isValidWhatsAppPhone(workspace.financeContactPhone)) {
+      setActive("configuracoes");
+      showToast("Configure o responsável e o WhatsApp antes de enviar lembretes");
+      return;
+    }
+
+    const selected = bills.filter((bill) =>
+      selectedBillIds.includes(bill.id) && !["paid", "cancelled"].includes(bill.databaseStatus),
+    );
+    if (!selected.length) {
+      showToast("Selecione pelo menos um boleto em aberto");
+      return;
+    }
+    setBulkReminderBills(selected);
+  }
+
   function openCheckReminder(check: CheckRecord) {
     if (workspace.role !== "admin") {
       showToast("Somente o administrador pode preparar lembretes");
@@ -421,6 +449,22 @@ export default function Home() {
     if (supabase && appState === "ready") {
       void persistReminder(supabase, workspace, bill, message).catch((error) => {
         console.error("Falha ao salvar histórico do lembrete", error);
+        showToast("WhatsApp aberto, mas o histórico não foi salvo");
+      });
+    }
+  }
+
+  function sendBulkReminder(selectedBills: Bill[], message: string) {
+    window.open(`https://wa.me/${normalizeWhatsAppPhone(workspace.financeContactPhone)}?text=${encodeURIComponent(message)}`, "_blank", "noopener,noreferrer");
+    const selectedIds = new Set(selectedBills.map((bill) => bill.id));
+    setBills((current) => current.map((item) => selectedIds.has(item.id) ? { ...item, status: "Lembrete enviado", databaseStatus: "reminder_sent", tone: "purple" } : item));
+    setBulkReminderBills([]);
+    setSelectedBillIds([]);
+    showToast(`${selectedBills.length} lembrete${selectedBills.length === 1 ? "" : "s"} preparado${selectedBills.length === 1 ? "" : "s"} no WhatsApp`);
+
+    if (supabase && appState === "ready") {
+      void persistBulkReminder(supabase, workspace, selectedBills, message).catch((error) => {
+        console.error("Falha ao salvar histórico dos lembretes", error);
         showToast("WhatsApp aberto, mas o histórico não foi salvo");
       });
     }
@@ -513,16 +557,49 @@ export default function Home() {
   }
 
   async function handlePaid(bill: Bill) {
+    if (!canMarkBillPaid(bill)) {
+      showToast("Anexe o comprovante antes de marcar o boleto como pago");
+      return;
+    }
+
     try {
       if (supabase && appState === "ready") {
         await markBillPaid(supabase, bill.id);
       }
       setBills((current) => current.map((item) => item.id === bill.id ? { ...item, status: "Pago", databaseStatus: "paid", tone: "success", paidAt: new Date().toISOString() } : item));
+      setSelectedBillIds((current) => current.filter((id) => id !== bill.id));
       setDetailBill(null);
       showToast("Boleto marcado como pago");
     } catch (error) {
       console.error("Falha ao atualizar boleto", error);
-      showToast("Não foi possível atualizar o boleto");
+      showToast(error instanceof Error ? error.message : "Não foi possível atualizar o boleto");
+    }
+  }
+
+  async function handlePaymentReceipt(bill: Bill, file: File) {
+    if (workspace.role === "aprovador") {
+      showToast("O perfil aprovador não pode anexar comprovantes");
+      return;
+    }
+
+    try {
+      validatePaymentReceipt(file);
+      const uploadedAt = new Date().toISOString();
+      const next = supabase && appState === "ready"
+        ? await uploadPaymentReceipt(supabase, workspace, bill, file)
+        : {
+            ...bill,
+            paymentReceiptPath: `local:${file.name}`,
+            paymentReceiptName: file.name,
+            paymentReceiptMimeType: file.type,
+            paymentReceiptUploadedAt: uploadedAt,
+          };
+      setBills((current) => current.map((item) => item.id === bill.id ? next : item));
+      setDetailBill(next);
+      showToast("Comprovante anexado. O pagamento foi liberado");
+    } catch (error) {
+      console.error("Falha ao anexar comprovante", error);
+      showToast(error instanceof Error ? error.message : "Não foi possível anexar o comprovante");
     }
   }
 
@@ -536,6 +613,7 @@ export default function Home() {
     try {
       if (supabase && appState === "ready") await deleteBill(supabase, bill);
       setBills((current) => current.filter((item) => item.id !== bill.id));
+      setSelectedBillIds((current) => current.filter((id) => id !== bill.id));
       setDetailBill(null);
       showToast("Boleto removido com sucesso");
     } catch (error) {
@@ -651,6 +729,26 @@ export default function Home() {
     }
   }
 
+  async function openPaymentReceipt(bill: Bill) {
+    if (!bill.paymentReceiptPath) return;
+    if (bill.paymentReceiptPath.startsWith("local:")) {
+      showToast("No modo demonstração, o comprovante não fica armazenado");
+      return;
+    }
+    if (!supabase) return;
+
+    const popup = window.open("about:blank", "_blank");
+    try {
+      const url = await createPaymentReceiptSignedUrl(supabase, bill.paymentReceiptPath);
+      if (popup) popup.location.href = url;
+      else window.location.assign(url);
+    } catch (error) {
+      popup?.close();
+      console.error("Falha ao abrir comprovante", error);
+      showToast("Não foi possível abrir o comprovante");
+    }
+  }
+
   async function signOut() {
     if (!supabase) return;
     await supabase.auth.signOut();
@@ -707,7 +805,7 @@ export default function Home() {
         <div className="content">
           {appState === "demo" && <div className="demo-banner"><AlertCircle size={16}/><span>Modo demonstração: configure o Supabase para ativar login e salvar os dados.</span></div>}
           {active === "dashboard" && <Dashboard bills={bills} userName={workspace.userName} onSeeBills={() => setActive("boletos")} onRemind={openReminder} onDetail={setDetailBill} />}
-          {active === "boletos" && <BillsPage bills={visibleBills} search={search} onSearch={setSearch} statusFilter={statusFilter} onFilter={setStatusFilter} onRemind={openReminder} onDetail={setDetailBill} onNew={openNewBill} canDelete={workspace.role === "admin"} onDelete={(bill) => void handleDeleteBill(bill)} />}
+          {active === "boletos" && <BillsPage bills={visibleBills} search={search} onSearch={setSearch} statusFilter={statusFilter} onFilter={setStatusFilter} onRemind={openReminder} onBulkRemind={openBulkReminder} selectedBillIds={selectedBillIds} onSelectionChange={setSelectedBillIds} onDetail={setDetailBill} onNew={openNewBill} canDelete={workspace.role === "admin"} canBulkRemind={workspace.role === "admin"} onDelete={(bill) => void handleDeleteBill(bill)} />}
           {active === "cheques" && <ChecksPage checks={checks} onNew={openNewCheck} onRemind={openCheckReminder} onCompensated={(check) => void handleCheckCompensated(check)} canEdit={workspace.role !== "aprovador"} onEdit={openEditCheck} canDelete={workspace.role === "admin"} onDelete={(check) => void handleDeleteCheck(check)} />}
           {active === "juros" && <InterestCalculatorPage />}
           {active === "lembretes" && <RemindersPage bills={bills} checks={checks} workspace={workspace} onRemind={() => bills[0] ? openReminder(bills[0]) : showToast("Cadastre um boleto antes de criar o lembrete")} onEditContact={() => setActive("configuracoes")} />}
@@ -720,8 +818,9 @@ export default function Home() {
       {newCheckOpen && <NewCheckModal companies={workspace.companies} onClose={() => setNewCheckOpen(false)} onSave={saveCheck} />}
       {editingCheck && <NewCheckModal check={editingCheck} companies={workspace.companies} onClose={() => setEditingCheck(null)} onSave={(input) => saveCheckChanges(editingCheck, input)} />}
       {reminderBill && <ReminderModal bill={reminderBill} workspace={workspace} onClose={() => setReminderBill(null)} onSend={(message) => sendReminder(reminderBill, message)} />}
+      {bulkReminderBills.length > 0 && <BulkReminderModal bills={bulkReminderBills} workspace={workspace} onClose={() => setBulkReminderBills([])} onSend={(message) => sendBulkReminder(bulkReminderBills, message)} />}
       {reminderCheck && <CheckReminderModal check={reminderCheck} workspace={workspace} onClose={() => setReminderCheck(null)} onSend={(message) => sendCheckReminder(reminderCheck, message)} />}
-      {detailBill && <BillDetail bill={detailBill} workspace={workspace} onClose={() => setDetailBill(null)} onRemind={() => { setDetailBill(null); openReminder(detailBill); }} onPaid={() => void handlePaid(detailBill)} onDelete={() => void handleDeleteBill(detailBill)} onOpenPdf={() => void openBillPdf(detailBill)} />}
+      {detailBill && <BillDetail bill={detailBill} workspace={workspace} onClose={() => setDetailBill(null)} onRemind={() => { setDetailBill(null); openReminder(detailBill); }} onPaid={() => void handlePaid(detailBill)} onDelete={() => void handleDeleteBill(detailBill)} onOpenPdf={() => void openBillPdf(detailBill)} onUploadReceipt={(file) => handlePaymentReceipt(detailBill, file)} onOpenReceipt={() => void openPaymentReceipt(detailBill)} />}
       {toast && <div className="toast"><CheckCircle2 size={18} /><span>{toast}</span></div>}
     </main>
   );
@@ -788,20 +887,43 @@ function Dashboard({ bills, userName, onSeeBills, onRemind, onDetail }: { bills:
   );
 }
 
-function BillsTable({ rows, onRemind, onDetail, onDelete, canDelete = false, compact = false }: { rows: Bill[]; onRemind: (bill: Bill) => void; onDetail: (bill: Bill) => void; onDelete?: (bill: Bill) => void; canDelete?: boolean; compact?: boolean }) {
+function BillsTable({ rows, onRemind, onDetail, onDelete, canDelete = false, compact = false, selectable = false, selectedBillIds = [], onSelectionChange }: { rows: Bill[]; onRemind: (bill: Bill) => void; onDetail: (bill: Bill) => void; onDelete?: (bill: Bill) => void; canDelete?: boolean; compact?: boolean; selectable?: boolean; selectedBillIds?: string[]; onSelectionChange?: (ids: string[]) => void }) {
+  const eligibleIds = rows
+    .filter((bill) => !["paid", "cancelled"].includes(bill.databaseStatus))
+    .map((bill) => bill.id);
+  const allEligibleSelected = eligibleIds.length > 0 && eligibleIds.every((id) => selectedBillIds.includes(id));
+
+  function toggleBill(billId: string, checked: boolean) {
+    if (!onSelectionChange) return;
+    const next = new Set(selectedBillIds);
+    if (checked) next.add(billId);
+    else next.delete(billId);
+    onSelectionChange([...next]);
+  }
+
+  function toggleAll(checked: boolean) {
+    if (!onSelectionChange) return;
+    const next = new Set(selectedBillIds);
+    eligibleIds.forEach((id) => checked ? next.add(id) : next.delete(id));
+    onSelectionChange([...next]);
+  }
+
   return (
     <div className="table-wrap">
-      <table><thead><tr><th>Fornecedor</th><th>Empresa / filial</th><th>Vencimento</th><th>Valor</th><th>Status</th><th><span className="sr-only">Ações</span></th></tr></thead><tbody>{rows.map((bill) => <tr key={bill.id} onClick={() => onDetail(bill)}><td><div className="supplier-cell"><span>{bill.initials}</span><div><strong>{bill.supplier}</strong><small>{bill.category}</small></div></div></td><td>{bill.company}</td><td>{bill.due}</td><td><strong>{bill.value}</strong></td><td><StatusBadge tone={bill.tone}>{bill.status}</StatusBadge></td><td onClick={(event) => event.stopPropagation()}><div className="row-actions">{bill.status !== "Pago" && <button className="whatsapp-mini" onClick={() => onRemind(bill)}><MessageCircle size={14}/>{compact ? "" : "Lembrar"}</button>}{canDelete && !compact && onDelete && <button className="delete-row-button" onClick={() => onDelete(bill)} aria-label={`Excluir boleto de ${bill.supplier}`}><Trash2 size={14}/></button>}</div></td></tr>)}</tbody></table>
+      <table><thead><tr>{selectable && <th className="select-column"><input type="checkbox" aria-label="Selecionar todos os boletos em aberto desta data" checked={allEligibleSelected} disabled={!eligibleIds.length} onChange={(event) => toggleAll(event.target.checked)}/></th>}<th>Fornecedor</th><th>Empresa / filial</th><th>Vencimento</th><th>Valor</th><th>Status</th><th><span className="sr-only">Ações</span></th></tr></thead><tbody>{rows.map((bill) => {
+        const eligible = !["paid", "cancelled"].includes(bill.databaseStatus);
+        return <tr key={bill.id} className={selectedBillIds.includes(bill.id) ? "selected-row" : ""} onClick={() => onDetail(bill)}>{selectable && <td className="select-column" onClick={(event) => event.stopPropagation()}><input type="checkbox" aria-label={`Selecionar boleto de ${bill.supplier}`} checked={selectedBillIds.includes(bill.id)} disabled={!eligible} title={!eligible ? "Boletos pagos ou cancelados não podem receber lembretes" : undefined} onChange={(event) => toggleBill(bill.id, event.target.checked)}/></td>}<td><div className="supplier-cell"><span>{bill.initials}</span><div><strong>{bill.supplier}</strong><small>{bill.category}</small></div></div></td><td>{bill.company}</td><td>{bill.due}</td><td><strong>{bill.value}</strong></td><td><StatusBadge tone={bill.tone}>{bill.status}</StatusBadge></td><td onClick={(event) => event.stopPropagation()}><div className="row-actions">{bill.status !== "Pago" && <button className="whatsapp-mini" onClick={() => onRemind(bill)}><MessageCircle size={14}/>{compact ? "" : "Lembrar"}</button>}{canDelete && !compact && onDelete && <button className="delete-row-button" onClick={() => onDelete(bill)} aria-label={`Excluir boleto de ${bill.supplier}`}><Trash2 size={14}/></button>}</div></td></tr>;
+      })}</tbody></table>
       {rows.length === 0 && <div className="empty-state"><Search size={28}/><h3>Nenhum boleto encontrado</h3><p>{compact ? "Cadastre o primeiro boleto para iniciar o acompanhamento." : "Tente buscar outro fornecedor ou status."}</p></div>}
     </div>
   );
 }
 
-function BillsByDate({ bills, onRemind, onDetail, onDelete, canDelete }: { bills: Bill[]; onRemind: (bill: Bill) => void; onDetail: (bill: Bill) => void; onDelete: (bill: Bill) => void; canDelete: boolean }) {
+function BillsByDate({ bills, onRemind, onDetail, onDelete, canDelete, selectable, selectedBillIds, onSelectionChange }: { bills: Bill[]; onRemind: (bill: Bill) => void; onDetail: (bill: Bill) => void; onDelete: (bill: Bill) => void; canDelete: boolean; selectable: boolean; selectedBillIds: string[]; onSelectionChange: (ids: string[]) => void }) {
   const groups = groupBillsByDueDate(bills);
 
   if (!groups.length) {
-    return <BillsTable rows={[]} onRemind={onRemind} onDetail={onDetail} canDelete={canDelete} onDelete={onDelete} />;
+    return <BillsTable rows={[]} onRemind={onRemind} onDetail={onDetail} canDelete={canDelete} onDelete={onDelete} selectable={selectable} selectedBillIds={selectedBillIds} onSelectionChange={onSelectionChange} />;
   }
 
   return <div className="bill-date-groups">{groups.map((group) => {
@@ -810,12 +932,12 @@ function BillsByDate({ bills, onRemind, onDetail, onDelete, canDelete }: { bills
     const total = group.bills.reduce((sum, bill) => sum + bill.amountCents, 0);
     return <section className={`bill-date-group ${days < 0 ? "overdue" : ""}`} key={group.date}>
       <header><div><CalendarDays size={17}/><div><small>{prefix}</small><strong>{formatDateLong(group.date)}</strong></div></div><span>{group.bills.length} boleto{group.bills.length === 1 ? "" : "s"} • {formatarCentavosEmReal(total)}</span></header>
-      <BillsTable rows={group.bills} onRemind={onRemind} onDetail={onDetail} canDelete={canDelete} onDelete={onDelete} />
+      <BillsTable rows={group.bills} onRemind={onRemind} onDetail={onDetail} canDelete={canDelete} onDelete={onDelete} selectable={selectable} selectedBillIds={selectedBillIds} onSelectionChange={onSelectionChange} />
     </section>;
   })}</div>;
 }
 
-function BillsPage({ bills, search, onSearch, statusFilter, onFilter, onRemind, onDetail, onNew, canDelete, onDelete }: { bills: Bill[]; search: string; onSearch: (value: string) => void; statusFilter: string; onFilter: (value: string) => void; onRemind: (bill: Bill) => void; onDetail: (bill: Bill) => void; onNew: () => void; canDelete: boolean; onDelete: (bill: Bill) => void }) {
+function BillsPage({ bills, search, onSearch, statusFilter, onFilter, onRemind, onBulkRemind, selectedBillIds, onSelectionChange, onDetail, onNew, canDelete, canBulkRemind, onDelete }: { bills: Bill[]; search: string; onSearch: (value: string) => void; statusFilter: string; onFilter: (value: string) => void; onRemind: (bill: Bill) => void; onBulkRemind: () => void; selectedBillIds: string[]; onSelectionChange: (ids: string[]) => void; onDetail: (bill: Bill) => void; onNew: () => void; canDelete: boolean; canBulkRemind: boolean; onDelete: (bill: Bill) => void }) {
   const pending = bills.filter((bill) => bill.databaseStatus === "pending");
   const dueTomorrow = bills.filter((bill) => calculateCalendarDays(bill.dueDate) === 1 && bill.databaseStatus !== "paid");
   const reminded = bills.filter((bill) => bill.databaseStatus === "reminder_sent");
@@ -824,7 +946,7 @@ function BillsPage({ bills, search, onSearch, statusFilter, onFilter, onRemind, 
     <>
       <section className="page-intro inner"><div><p>Controle financeiro</p><h1>Boletos</h1><h2>Cadastre, acompanhe vencimentos e avise o financeiro.</h2></div><div className="intro-actions"><button className="secondary-button"><Upload size={17}/> Importar planilha</button><button className="primary-button" onClick={onNew}><Plus size={17}/> Novo boleto</button></div></section>
       <section className="summary-strip"><div><span>Pendentes</span><strong>{pending.length}</strong></div><div><span>Vencem amanhã</span><strong>{dueTomorrow.length}</strong></div><div><span>Lembretes preparados</span><strong>{reminded.length}</strong></div><div className="danger-text"><span>Vencidos</span><strong>{overdue.length}</strong></div></section>
-      <section className="accounts-card"><div className="filter-row"><label className="search-box"><Search size={17}/><input value={search} onChange={(event) => onSearch(event.target.value)} placeholder="Buscar fornecedor, CNPJ, categoria..." /></label><label className="filter-select"><SlidersHorizontal size={16}/><select value={statusFilter} onChange={(event) => onFilter(event.target.value)}><option>Todos</option><option>Pendente</option><option>Vence amanhã</option><option>Vencido</option><option>Lembrete enviado</option></select><ChevronDown size={14}/></label><button className="filter-button"><Building2 size={16}/> Todas as empresas <ChevronDown size={14}/></button></div><BillsByDate bills={bills} onRemind={onRemind} onDetail={onDetail} canDelete={canDelete} onDelete={onDelete} /><div className="pagination"><span>{bills.length ? `Mostrando ${bills.length} boleto${bills.length === 1 ? "" : "s"}, separados por vencimento` : "Nenhum boleto para mostrar"}</span><div><button disabled><ChevronLeft size={16}/></button><button className="current">1</button><button disabled><ChevronRight size={16}/></button></div></div></section>
+      <section className="accounts-card"><div className="filter-row"><label className="search-box"><Search size={17}/><input value={search} onChange={(event) => onSearch(event.target.value)} placeholder="Buscar fornecedor, CNPJ, categoria..." /></label><label className="filter-select"><SlidersHorizontal size={16}/><select value={statusFilter} onChange={(event) => onFilter(event.target.value)}><option>Todos</option><option>Pendente</option><option>Vence amanhã</option><option>Vencido</option><option>Lembrete enviado</option></select><ChevronDown size={14}/></label><button className="filter-button"><Building2 size={16}/> Todas as empresas <ChevronDown size={14}/></button></div>{canBulkRemind && <div className={`bulk-selection-bar ${selectedBillIds.length ? "active" : ""}`}><div><CheckCircle2 size={18}/><span>{selectedBillIds.length ? `${selectedBillIds.length} boleto${selectedBillIds.length === 1 ? " selecionado" : "s selecionados"}` : "Marque os boletos que deseja incluir no mesmo lembrete"}</span></div><div>{selectedBillIds.length > 0 && <button className="clear-selection" onClick={() => onSelectionChange([])}>Limpar seleção</button>}<button className="bulk-reminder-button" disabled={!selectedBillIds.length} onClick={onBulkRemind}><MessageCircle size={17}/> Lembrar selecionados</button></div></div>}<BillsByDate bills={bills} onRemind={onRemind} onDetail={onDetail} canDelete={canDelete} onDelete={onDelete} selectable={canBulkRemind} selectedBillIds={selectedBillIds} onSelectionChange={onSelectionChange} /><div className="pagination"><span>{bills.length ? `Mostrando ${bills.length} boleto${bills.length === 1 ? "" : "s"}, separados por vencimento` : "Nenhum boleto para mostrar"}</span><div><button disabled><ChevronLeft size={16}/></button><button className="current">1</button><button disabled><ChevronRight size={16}/></button></div></div></section>
     </>
   );
 }
@@ -1299,8 +1421,49 @@ function ReminderModal({ bill, workspace, onClose, onSend }: { bill: Bill; works
   );
 }
 
-function BillDetail({ bill, workspace, onClose, onRemind, onPaid, onDelete, onOpenPdf }: { bill: Bill; workspace: WorkspaceContext; onClose: () => void; onRemind: () => void; onPaid: () => void; onDelete: () => void; onOpenPdf: () => void }) {
+function BulkReminderModal({ bills, workspace, onClose, onSend }: { bills: Bill[]; workspace: WorkspaceContext; onClose: () => void; onSend: (message: string) => void }) {
+  const total = formatarCentavosEmReal(bills.reduce((sum, bill) => sum + bill.amountCents, 0));
+  const [message, setMessage] = useState(() => renderBulkReminderMessage(
+    workspace.financeContactName,
+    bills.map((bill) => ({ fornecedor: bill.supplier, valor: bill.value, vencimento: bill.dueLong })),
+    total,
+  ));
+  const contactInitials = workspace.financeContactName.split(/\s+/).slice(0, 2).map((part) => part[0]?.toUpperCase()).join("") || "RF";
+
+  return (
+    <div className="modal-backdrop" onMouseDown={onClose}>
+      <section className="modal reminder-modal bulk-reminder-modal" onMouseDown={(event) => event.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="bulk-reminder-title">
+        <div className="modal-head"><div><small>LEMBRETE EM GRUPO</small><h2 id="bulk-reminder-title">Enviar {bills.length} boletos pelo WhatsApp</h2><p>Todos os boletos serão enviados em uma única mensagem.</p></div><button onClick={onClose} aria-label="Fechar"><X size={20}/></button></div>
+        <div className="recipient-card"><MiniAvatar initials={contactInitials} color="mint"/><div><small>RESPONSÁVEL FINANCEIRO</small><strong>{workspace.financeContactName}</strong><span>{formatWhatsAppPhone(workspace.financeContactPhone)}</span></div><CheckCircle2 size={18}/></div>
+        <section className="bulk-bill-preview">
+          <header><div><small>BOLETOS SELECIONADOS</small><strong>{bills.length} {bills.length === 1 ? "boleto" : "boletos"}</strong></div><span>{total}</span></header>
+          <div className="bulk-bill-list">{bills.map((bill) => <article key={bill.id}><MiniAvatar initials={bill.initials} color={bill.tone === "danger" ? "red" : "amber"}/><div><strong>{bill.supplier}</strong><small>{bill.company} • {bill.dueLong}</small></div><span>{bill.value}</span></article>)}</div>
+          {bills.some((bill) => bill.tone === "danger") && <p><AlertCircle size={14}/> O total usa os valores originais. Confirme no banco os juros dos boletos vencidos.</p>}
+        </section>
+        <label className="message-label"><span>Mensagem</span><textarea value={message} onChange={(event) => setMessage(event.target.value)}/><small>Revise a lista antes de abrir o WhatsApp.</small></label>
+        <div className="modal-footer"><button className="secondary-button" onClick={onClose}>Cancelar</button><button className="whatsapp-button" disabled={!message.trim()} onClick={() => onSend(message.trim())}><MessageCircle size={18}/> Abrir WhatsApp com {bills.length} boletos</button></div>
+      </section>
+    </div>
+  );
+}
+
+function BillDetail({ bill, workspace, onClose, onRemind, onPaid, onDelete, onOpenPdf, onUploadReceipt, onOpenReceipt }: { bill: Bill; workspace: WorkspaceContext; onClose: () => void; onRemind: () => void; onPaid: () => void; onDelete: () => void; onOpenPdf: () => void; onUploadReceipt: (file: File) => Promise<void>; onOpenReceipt: () => void }) {
   const calculation = calcularEncargosDoBoleto(bill);
+  const [uploadingReceipt, setUploadingReceipt] = useState(false);
+  const paymentAllowed = canMarkBillPaid(bill);
+  const canUploadReceipt = workspace.role !== "aprovador";
+
+  async function selectReceipt(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    setUploadingReceipt(true);
+    try {
+      await onUploadReceipt(file);
+    } finally {
+      setUploadingReceipt(false);
+    }
+  }
 
   return (
     <div className="drawer-backdrop" onMouseDown={onClose}>
@@ -1315,7 +1478,16 @@ function BillDetail({ bill, workspace, onClose, onRemind, onPaid, onDelete, onOp
         </div>}
 
         {bill.protestDays && <div className="protest-alert"><span><Gavel size={19}/></span><div><small>PRAZO PARA PROTESTO</small><strong>{bill.protestDays} {bill.protestDays === 1 ? "dia" : "dias"} após o vencimento</strong><p>O financeiro será avisado sobre este prazo no lembrete.</p></div></div>}
-        <div className="detail-actions"><button onClick={onRemind}><MessageCircle size={17}/> Lembrar no WhatsApp</button>{bill.databaseStatus !== "paid" && <button onClick={onPaid}><CheckCircle2 size={17}/> Marcar como pago</button>}{workspace.role === "admin" && <button className="danger-button" onClick={onDelete}><Trash2 size={17}/> Excluir boleto</button>}</div>
+        <section className={`receipt-box ${bill.paymentReceiptPath ? "has-receipt" : "needs-receipt"}`}>
+          <span className="receipt-icon">{bill.paymentReceiptPath ? <CheckCircle2 size={21}/> : <Upload size={21}/>}</span>
+          <div className="receipt-copy"><small>COMPROVANTE DE PAGAMENTO</small><strong>{bill.paymentReceiptPath ? bill.paymentReceiptName || "Comprovante anexado" : "Comprovante obrigatório"}</strong><span>{bill.paymentReceiptPath ? `Armazenado com acesso protegido${bill.paymentReceiptUploadedAt ? ` em ${new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short" }).format(new Date(bill.paymentReceiptUploadedAt))}` : ""}.` : "Envie um PDF, JPG ou PNG de até 10 MB para liberar o pagamento."}</span></div>
+          <div className="receipt-buttons">
+            {bill.paymentReceiptPath && <button type="button" onClick={onOpenReceipt} aria-label="Abrir comprovante"><Download size={17}/></button>}
+            {canUploadReceipt && <label className={uploadingReceipt ? "uploading" : ""}>{uploadingReceipt ? "Enviando..." : bill.paymentReceiptPath ? "Substituir" : "Anexar"}<input type="file" accept="application/pdf,image/jpeg,image/png,.pdf,.jpg,.jpeg,.png" disabled={uploadingReceipt} onChange={(event) => void selectReceipt(event)}/></label>}
+          </div>
+        </section>
+        {!paymentAllowed && bill.databaseStatus !== "paid" && <p className="receipt-required"><AlertCircle size={15}/> O pagamento só poderá ser confirmado depois que o comprovante for anexado.</p>}
+        <div className="detail-actions"><button onClick={onRemind}><MessageCircle size={17}/> Lembrar no WhatsApp</button>{bill.databaseStatus !== "paid" && <button onClick={onPaid} disabled={!paymentAllowed} title={!paymentAllowed ? "Anexe o comprovante para liberar esta ação" : undefined}><CheckCircle2 size={17}/> Marcar como pago</button>}{workspace.role === "admin" && <button className="danger-button" onClick={onDelete}><Trash2 size={17}/> Excluir boleto</button>}</div>
         <section className="detail-section"><h3>Informações</h3><dl><div><dt>Empresa / filial</dt><dd>{bill.company}</dd></div><div><dt>Categoria</dt><dd>{bill.category}</dd></div><div><dt>Centro de custo</dt><dd>{bill.costCenter || "Não informado"}</dd></div><div><dt>Fornecedor</dt><dd>{bill.supplier}</dd></div><div><dt>CNPJ do beneficiário</dt><dd>{bill.supplierTaxId ? formatCnpj(bill.supplierTaxId) : "Não informado"}</dd></div><div><dt>Multa por atraso</dt><dd>{bill.lateFeePercent.toLocaleString("pt-BR")}% uma vez</dd></div><div><dt>Juros simples</dt><dd>{bill.monthlyInterestPercent.toLocaleString("pt-BR")}% ao mês</dd></div><div><dt>Prazo para protesto</dt><dd>{bill.protestDays ? `${bill.protestDays} ${bill.protestDays === 1 ? "dia" : "dias"} após o vencimento` : "Sem prazo informado"}</dd></div><div><dt>Código de barras</dt><dd className="barcode">{bill.barcode || "Não informado"}</dd></div><div><dt>Observações</dt><dd>{bill.notes || "Nenhuma observação"}</dd></div></dl></section>
         <section className={`document-box ${bill.attachmentPath ? "has-document" : ""}`}><FileText size={22}/><div><strong>{bill.attachmentPath ? "PDF do boleto anexado" : "Nenhum arquivo anexado"}</strong><small>{bill.attachmentPath ? "Arquivo armazenado com acesso protegido." : "Anexe um PDF no cadastro para consultá-lo aqui."}</small></div>{bill.attachmentPath && <button onClick={onOpenPdf} aria-label="Abrir PDF do boleto"><Download size={17}/></button>}</section>
         <section className="timeline"><h3>Histórico</h3><div><i className="done"><Check size={11}/></i><p><strong>Boleto cadastrado</strong><span>Por {workspace.userName}</span></p></div>{bill.status === "Lembrete enviado" && <div><i className="done"><Send size={11}/></i><p><strong>Lembrete preparado no WhatsApp</strong><span>Para {workspace.financeContactName || "o responsável financeiro"}</span></p></div>}<div><i><Clock3 size={11}/></i><p><strong>{bill.databaseStatus === "paid" ? "Pagamento concluído" : "Aguardando pagamento"}</strong><span>Responsável: Financeiro</span></p></div></section>

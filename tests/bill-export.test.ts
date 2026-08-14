@@ -9,7 +9,8 @@ function bill(id: string, dueDate: string, amountCents: number): Bill {
     due: dueDate, dueLong: dueDate, value: "", status: "Pendente", databaseStatus: "pending", tone: "neutral",
     initials: "FO", amountCents, dueDate, lateFeePercent: 2, monthlyInterestPercent: 1,
     costCenter: "Administrativo", notes: "", approvalStatus: "pending", paidAt: null,
-    createdAt: "2026-08-01T10:00:00Z", attachmentPath: null,
+    createdAt: "2026-08-01T10:00:00Z", attachmentPath: null, paymentReceiptPath: null,
+    paymentReceiptName: "", paymentReceiptMimeType: "", paymentReceiptUploadedAt: null,
   };
 }
 
@@ -21,4 +22,5 @@ test("organiza as linhas da planilha pela data de vencimento", () => {
   assert.deepEqual(rows.map((row) => row.dueDate), ["2026-08-10", "2026-09-10"]);
   assert.deepEqual(rows.map((row) => row.amount), [100, 200]);
   assert.deepEqual(rows.map((row) => row.supplierTaxId), ["12.345.678/0001-90", "12.345.678/0001-90"]);
+  assert.deepEqual(rows.map((row) => row.hasPaymentReceipt), ["Não", "Não"]);
 });

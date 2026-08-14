@@ -13,9 +13,10 @@ O projeto está preparado para funcionar em dois modos:
 4. Depois, faça o mesmo com `supabase/migrations/202608130002_checks.sql`.
 5. Execute `supabase/migrations/202608140003_whatsapp_settings.sql`.
 6. Execute `supabase/migrations/202608140004_profiles_and_documents.sql`.
-7. Por último, execute `supabase/migrations/202608140005_bill_cnpj.sql`.
-8. Se o banco já está funcionando, execute somente as migrações que ainda não foram aplicadas, sempre em ordem. Para esta atualização, basta executar a migração `005` uma vez.
-9. Opcionalmente, execute `supabase/verify.sql`. Todas as tabelas listadas devem mostrar `row_security = true`.
+7. Execute `supabase/migrations/202608140005_bill_cnpj.sql`.
+8. Por último, execute `supabase/migrations/202608140006_payment_receipts.sql`.
+9. Se o banco já está funcionando, execute somente as migrações que ainda não foram aplicadas, sempre em ordem. Para esta atualização, basta executar a migração `006` uma vez.
+10. Opcionalmente, execute `supabase/verify.sql`. Todas as tabelas listadas devem mostrar `row_security = true`.
 
 O script cria:
 
@@ -29,7 +30,8 @@ O script cria:
 - contato e modelo de mensagem do WhatsApp por grupo;
 - nome e foto de perfil editáveis;
 - armazenamento público das fotos de perfil no bucket `profile-avatars`;
-- armazenamento privado dos PDFs no bucket `bill-documents`;
+- armazenamento privado dos PDFs e comprovantes no bucket `bill-documents`;
+- comprovantes em PDF, JPG ou PNG e bloqueio de pagamento sem comprovante;
 - CNPJ do beneficiário em cada boleto;
 - notificações internas;
 - políticas de Row Level Security (RLS).
@@ -75,6 +77,10 @@ Abra `http://localhost:3000`, crie uma conta e informe o nome do grupo e da empr
 Depois de entrar, abra **Configurações > WhatsApp**, informe o nome do responsável e o número com DDD e clique em **Salvar WhatsApp**. O código do Brasil (`+55`) é incluído automaticamente.
 
 Em **Configurações**, teste também a alteração do nome, foto do perfil e nome do grupo. Em **Boletos**, escolha um PDF com texto selecionável para preencher fornecedor, CNPJ do beneficiário, valor, vencimento e código de barras automaticamente. PDFs digitalizados somente como imagem ainda precisam de preenchimento manual.
+
+Depois de cadastrar um boleto, abra seus detalhes e anexe o comprovante em PDF,
+JPG ou PNG. O botão **Marcar como pago** permanece bloqueado até o arquivo ser
+salvo. O comprovante fica privado e é aberto por uma URL temporária.
 
 Antes do deploy, valide:
 
@@ -124,7 +130,9 @@ Depois do deploy, atualize a **Site URL** e as **Redirect URLs** no Supabase com
 - O valor de cada cheque é armazenado em centavos no banco, junto com número, banco, empresa, datas e observações.
 - Administradores e financeiros podem editar cheques já cadastrados, inclusive substituir o valor completo.
 - Na página de boletos, os registros são separados e ordenados pela data de vencimento.
+- O administrador pode selecionar vários boletos em aberto e abrir uma única mensagem no WhatsApp com a lista e o valor total. Boletos pagos ou cancelados não podem ser selecionados.
 - As datas dos cheques são calculadas em dias corridos. O WhatsApp só é aberto após uma ação do administrador e a mensagem precisa ser confirmada manualmente.
 - Os PDFs dos boletos ficam em um bucket privado e são abertos com uma URL temporária de cinco minutos.
-- A exportação em Excel inclui um resumo e uma aba com os boletos ordenados por vencimento, contendo CNPJ do beneficiário, valores, datas, encargos, protesto, centro de custo, aprovação e demais campos cadastrados.
+- Os comprovantes aceitam PDF, JPG e PNG de até 10 MB. A interface e o banco impedem marcar um boleto como pago sem comprovante.
+- A exportação em Excel inclui um resumo e uma aba com os boletos ordenados por vencimento, contendo CNPJ do beneficiário, valores, datas, encargos, protesto, centro de custo, aprovação, indicação de comprovante e demais campos cadastrados.
 - A integração bancária continua fora desta etapa.

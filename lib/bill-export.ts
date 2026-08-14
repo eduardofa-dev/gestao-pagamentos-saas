@@ -22,6 +22,7 @@ export function buildBillExportRows(bills: Bill[]) {
       barcode: bill.barcode ?? "",
       notes: bill.notes,
       hasPdf: bill.attachmentPath ? "Sim" : "Não",
+      hasPaymentReceipt: bill.paymentReceiptPath ? "Sim" : "Não",
     }));
 }
 
@@ -42,12 +43,12 @@ export async function exportBillsToExcel(bills: Bill[], groupName: string) {
   const header = [
     "Vencimento", "Cadastro", "Pagamento", "Empresa / filial", "Fornecedor",
     "CNPJ do beneficiário", "Valor", "Categoria", "Centro de custo", "Status", "Aprovação",
-    "Multa", "Juros ao mês", "Dias para protesto", "Código de barras", "Observações", "PDF anexado",
+    "Multa", "Juros ao mês", "Dias para protesto", "Código de barras", "Observações", "PDF anexado", "Comprovante anexado",
   ];
   const data = rows.map((row) => [
     isoToDate(row.dueDate), isoToDate(row.createdAt), isoToDate(row.paidAt), row.company,
     row.supplier, row.supplierTaxId, row.amount, row.category, row.costCenter, row.status,
-    row.approvalStatus, row.lateFeeRate, row.monthlyInterestRate, row.protestDays, row.barcode, row.notes, row.hasPdf,
+    row.approvalStatus, row.lateFeeRate, row.monthlyInterestRate, row.protestDays, row.barcode, row.notes, row.hasPdf, row.hasPaymentReceipt,
   ]);
 
   const detailSheet = XLSX.utils.aoa_to_sheet([
@@ -58,9 +59,9 @@ export async function exportBillsToExcel(bills: Bill[], groupName: string) {
     ...data,
   ], { cellDates: true });
 
-  detailSheet["!merges"] = [XLSX.utils.decode_range("A1:Q1"), XLSX.utils.decode_range("A2:Q2")];
-  detailSheet["!autofilter"] = { ref: `A4:Q${rows.length + 4}` };
-  detailSheet["!cols"] = [12, 12, 12, 22, 28, 20, 14, 20, 20, 18, 14, 11, 14, 16, 36, 30, 13].map((wch) => ({ wch }));
+  detailSheet["!merges"] = [XLSX.utils.decode_range("A1:R1"), XLSX.utils.decode_range("A2:R2")];
+  detailSheet["!autofilter"] = { ref: `A4:R${rows.length + 4}` };
+  detailSheet["!cols"] = [12, 12, 12, 22, 28, 20, 14, 20, 20, 18, 14, 11, 14, 16, 36, 30, 13, 19].map((wch) => ({ wch }));
 
   for (let row = 5; row <= rows.length + 4; row += 1) {
     for (const column of ["A", "B", "C"]) if (detailSheet[`${column}${row}`]) detailSheet[`${column}${row}`].z = "dd/mm/yyyy";

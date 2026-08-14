@@ -1,5 +1,6 @@
 import type { SupabaseClient, User } from "@supabase/supabase-js";
 import { formatarCentavosEmReal, obterDataAtualISO } from "./calculo-juros";
+import { validatePaymentReceipt } from "./payment-receipt";
 
 export type MemberRole = "admin" | "financeiro" | "aprovador";
 
@@ -34,6 +35,10 @@ export type Bill = {
   paidAt: string | null;
   createdAt: string;
   attachmentPath: string | null;
+  paymentReceiptPath: string | null;
+  paymentReceiptName: string;
+  paymentReceiptMimeType: string;
+  paymentReceiptUploadedAt: string | null;
 };
 
 export type NewBillInput = {
@@ -98,6 +103,10 @@ type DatabaseBill = {
   paid_at: string | null;
   created_at: string;
   attachment_path: string | null;
+  payment_receipt_path: string | null;
+  payment_receipt_name: string | null;
+  payment_receipt_mime_type: string | null;
+  payment_receipt_uploaded_at: string | null;
   companies?: { name?: string } | Array<{ name?: string }> | null;
 };
 
@@ -199,6 +208,10 @@ function mapDatabaseBill(row: DatabaseBill): Bill {
     paidAt: row.paid_at,
     createdAt: row.created_at,
     attachmentPath: row.attachment_path,
+    paymentReceiptPath: row.payment_receipt_path,
+    paymentReceiptName: row.payment_receipt_name ?? "",
+    paymentReceiptMimeType: row.payment_receipt_mime_type ?? "",
+    paymentReceiptUploadedAt: row.payment_receipt_uploaded_at,
   };
 }
 
@@ -223,6 +236,10 @@ export function createLocalBill(input: NewBillInput): Bill {
     paid_at: null,
     created_at: new Date().toISOString(),
     attachment_path: input.pdfFile ? `local:${input.pdfFile.name}` : null,
+    payment_receipt_path: null,
+    payment_receipt_name: null,
+    payment_receipt_mime_type: null,
+    payment_receipt_uploaded_at: null,
   });
 }
 
@@ -357,7 +374,7 @@ export async function updateProfileSettings(
 export async function loadBills(supabase: SupabaseClient, groupId: string) {
   const { data, error } = await supabase
     .from("bills")
-    .select("id, supplier, supplier_tax_id, category, company_id, amount_cents, due_date, status, late_fee_bps, monthly_interest_bps, protest_days, barcode, cost_center, notes, approval_status, paid_at, created_at, attachment_path, companies(name)")
+    .select("id, supplier, supplier_tax_id, category, company_id, amount_cents, due_date, status, late_fee_bps, monthly_interest_bps, protest_days, barcode, cost_center, notes, approval_status, paid_at, created_at, attachment_path, payment_receipt_path, payment_receipt_name, payment_receipt_mime_type, payment_receipt_uploaded_at, companies(name)")
     .eq("group_id", groupId)
     .order("due_date", { ascending: true });
 
@@ -400,7 +417,7 @@ export async function insertBill(
       notes: input.notes || null,
       created_by: workspace.userId,
     })
-    .select("id, supplier, supplier_tax_id, category, company_id, amount_cents, due_date, status, late_fee_bps, monthly_interest_bps, protest_days, barcode, cost_center, notes, approval_status, paid_at, created_at, attachment_path, companies(name)")
+    .select("id, supplier, supplier_tax_id, category, company_id, amount_cents, due_date, status, late_fee_bps, monthly_interest_bps, protest_days, barcode, cost_center, notes, approval_status, paid_at, created_at, attachment_path, payment_receipt_path, payment_receipt_name, payment_receipt_mime_type, payment_receipt_uploaded_at, companies(name)")
     .single();
 
   if (error) throw error;
@@ -437,21 +454,68 @@ export async function createBillPdfSignedUrl(supabase: SupabaseClient, attachmen
   return data.signedUrl;
 }
 
+export async function uploadPaymentReceipt(
+  supabase: SupabaseClient,
+  workspace: WorkspaceContext,
+  bill: Bill,
+  file: File,
+) {
+  validatePaymentReceipt(file);
+
+  const paymentReceiptPath = `${workspace.groupId}/${bill.id}/comprovante`;
+  const paymentReceiptUploadedAt = new Date().toISOString();
+  const { error: uploadError } = await supabase.storage
+    .from("bill-documents")
+    .upload(paymentReceiptPath, file, { upsert: true, contentType: file.type });
+  if (uploadError) throw uploadError;
+
+  const { error: updateError } = await supabase
+    .from("bills")
+    .update({
+      payment_receipt_path: paymentReceiptPath,
+      payment_receipt_name: file.name,
+      payment_receipt_mime_type: file.type,
+      payment_receipt_uploaded_at: paymentReceiptUploadedAt,
+    })
+    .eq("id", bill.id);
+  if (updateError) throw updateError;
+
+  return {
+    ...bill,
+    paymentReceiptPath,
+    paymentReceiptName: file.name,
+    paymentReceiptMimeType: file.type,
+    paymentReceiptUploadedAt,
+  };
+}
+
+export async function createPaymentReceiptSignedUrl(supabase: SupabaseClient, receiptPath: string) {
+  const { data, error } = await supabase.storage.from("bill-documents").createSignedUrl(receiptPath, 300);
+  if (error) throw error;
+  return data.signedUrl;
+}
+
 export async function markBillPaid(supabase: SupabaseClient, billId: string) {
-  const { error } = await supabase
+  const { data, error } = await supabase
     .from("bills")
     .update({ status: "paid", paid_at: new Date().toISOString() })
-    .eq("id", billId);
+    .eq("id", billId)
+    .not("payment_receipt_path", "is", null)
+    .select("id")
+    .maybeSingle();
   if (error) throw error;
+  if (!data) throw new Error("Anexe o comprovante antes de marcar o boleto como pago.");
 }
 
 export async function deleteBill(supabase: SupabaseClient, bill: Bill) {
   const { error } = await supabase.from("bills").delete().eq("id", bill.id);
   if (error) throw error;
 
-  if (bill.attachmentPath && !bill.attachmentPath.startsWith("local:")) {
-    const { error: storageError } = await supabase.storage.from("bill-documents").remove([bill.attachmentPath]);
-    if (storageError) console.warn("Boleto excluído, mas o PDF não pôde ser removido", storageError);
+  const storedDocuments = [bill.attachmentPath, bill.paymentReceiptPath]
+    .filter((path): path is string => Boolean(path && !path.startsWith("local:")));
+  if (storedDocuments.length) {
+    const { error: storageError } = await supabase.storage.from("bill-documents").remove(storedDocuments);
+    if (storageError) console.warn("Boleto excluído, mas seus documentos não puderam ser removidos", storageError);
   }
 }
 
@@ -476,5 +540,34 @@ export async function persistReminder(
     .from("bills")
     .update({ status: "reminder_sent" })
     .eq("id", bill.id);
+  if (billError) throw billError;
+}
+
+export async function persistBulkReminder(
+  supabase: SupabaseClient,
+  workspace: WorkspaceContext,
+  bills: Bill[],
+  message: string,
+) {
+  if (!bills.length) return;
+
+  const { error: reminderError } = await supabase.from("reminders").insert(
+    bills.map((bill) => ({
+      group_id: workspace.groupId,
+      bill_id: bill.id,
+      sent_by: workspace.userId,
+      recipient_name: workspace.financeContactName,
+      recipient_phone: workspace.financeContactPhone,
+      message,
+      status: "opened",
+    })),
+  );
+  if (reminderError) throw reminderError;
+
+  const { error: billError } = await supabase
+    .from("bills")
+    .update({ status: "reminder_sent" })
+    .in("id", bills.map((bill) => bill.id))
+    .in("status", ["pending", "reminder_sent"]);
   if (billError) throw billError;
 }
