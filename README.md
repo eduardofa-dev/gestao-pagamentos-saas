@@ -2,7 +2,8 @@
 
 SaaS multiempresa para organizar boletos e cheques, calcular vencimentos,
 compensações, multa e juros, controlar prazos para protesto e preparar
-lembretes pelo WhatsApp. O sistema também lê dados de boletos em PDF, armazena
+lembretes pelo WhatsApp. O sistema também lê fornecedor, CNPJ, valor, vencimento
+e código de barras dos boletos em PDF, armazena
 os documentos com acesso protegido e exporta os boletos para Excel.
 
 ## Tecnologias
@@ -44,4 +45,6 @@ com a mensagem pronta, mas o envio continua dependendo da confirmação manual.
 Em **Configurações**, cada usuário pode alterar o próprio nome e foto. O
 administrador também pode alterar o nome do grupo. Em **Relatórios**, o botão
 **Exportar Excel** gera uma planilha com todos os campos dos boletos ordenados
-pela data de vencimento.
+pela data de vencimento, incluindo o CNPJ do beneficiário. Valores de boletos e
+cheques podem ser digitados diretamente no formato brasileiro, como `1.250,75`.
+O administrador pode excluir registros de boletos e cheques após confirmar a ação.

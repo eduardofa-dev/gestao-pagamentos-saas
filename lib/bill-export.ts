@@ -1,4 +1,5 @@
 import type { Bill } from "./finance-data";
+import { formatCnpj } from "./boleto-parser.ts";
 
 export function buildBillExportRows(bills: Bill[]) {
   return [...bills]
@@ -9,6 +10,7 @@ export function buildBillExportRows(bills: Bill[]) {
       paidAt: bill.paidAt,
       company: bill.company,
       supplier: bill.supplier,
+      supplierTaxId: formatCnpj(bill.supplierTaxId),
       amount: bill.amountCents / 100,
       category: bill.category,
       costCenter: bill.costCenter,
@@ -39,13 +41,13 @@ export async function exportBillsToExcel(bills: Bill[], groupName: string) {
   const rows = buildBillExportRows(bills);
   const header = [
     "Vencimento", "Cadastro", "Pagamento", "Empresa / filial", "Fornecedor",
-    "Valor", "Categoria", "Centro de custo", "Status", "Aprovação", "Multa",
-    "Juros ao mês", "Dias para protesto", "Código de barras", "Observações", "PDF anexado",
+    "CNPJ do beneficiário", "Valor", "Categoria", "Centro de custo", "Status", "Aprovação",
+    "Multa", "Juros ao mês", "Dias para protesto", "Código de barras", "Observações", "PDF anexado",
   ];
   const data = rows.map((row) => [
     isoToDate(row.dueDate), isoToDate(row.createdAt), isoToDate(row.paidAt), row.company,
-    row.supplier, row.amount, row.category, row.costCenter, row.status, row.approvalStatus,
-    row.lateFeeRate, row.monthlyInterestRate, row.protestDays, row.barcode, row.notes, row.hasPdf,
+    row.supplier, row.supplierTaxId, row.amount, row.category, row.costCenter, row.status,
+    row.approvalStatus, row.lateFeeRate, row.monthlyInterestRate, row.protestDays, row.barcode, row.notes, row.hasPdf,
   ]);
 
   const detailSheet = XLSX.utils.aoa_to_sheet([
@@ -56,14 +58,14 @@ export async function exportBillsToExcel(bills: Bill[], groupName: string) {
     ...data,
   ], { cellDates: true });
 
-  detailSheet["!merges"] = [XLSX.utils.decode_range("A1:P1"), XLSX.utils.decode_range("A2:P2")];
-  detailSheet["!autofilter"] = { ref: `A4:P${rows.length + 4}` };
-  detailSheet["!cols"] = [12, 12, 12, 22, 28, 14, 20, 20, 18, 14, 11, 14, 16, 36, 30, 13].map((wch) => ({ wch }));
+  detailSheet["!merges"] = [XLSX.utils.decode_range("A1:Q1"), XLSX.utils.decode_range("A2:Q2")];
+  detailSheet["!autofilter"] = { ref: `A4:Q${rows.length + 4}` };
+  detailSheet["!cols"] = [12, 12, 12, 22, 28, 20, 14, 20, 20, 18, 14, 11, 14, 16, 36, 30, 13].map((wch) => ({ wch }));
 
   for (let row = 5; row <= rows.length + 4; row += 1) {
     for (const column of ["A", "B", "C"]) if (detailSheet[`${column}${row}`]) detailSheet[`${column}${row}`].z = "dd/mm/yyyy";
-    if (detailSheet[`F${row}`]) detailSheet[`F${row}`].z = 'R$ #,##0.00';
-    for (const column of ["K", "L"]) if (detailSheet[`${column}${row}`]) detailSheet[`${column}${row}`].z = "0.00%";
+    if (detailSheet[`G${row}`]) detailSheet[`G${row}`].z = 'R$ #,##0.00';
+    for (const column of ["L", "M"]) if (detailSheet[`${column}${row}`]) detailSheet[`${column}${row}`].z = "0.00%";
   }
 
   const summarySheet = XLSX.utils.aoa_to_sheet([
@@ -71,9 +73,9 @@ export async function exportBillsToExcel(bills: Bill[], groupName: string) {
     [],
     ["Indicador", "Valor"],
     ["Total de boletos", { f: `COUNTA(Boletos!E5:E${rows.length + 4})` }],
-    ["Valor total", { f: `SUM(Boletos!F5:F${rows.length + 4})` }],
-    ["Boletos pagos", { f: `COUNTIF(Boletos!I5:I${rows.length + 4},\"Pago\")` }],
-    ["Boletos vencidos", { f: `COUNTIF(Boletos!I5:I${rows.length + 4},\"Vencido\")` }],
+    ["Valor total", { f: `SUM(Boletos!G5:G${rows.length + 4})` }],
+    ["Boletos pagos", { f: `COUNTIF(Boletos!J5:J${rows.length + 4},\"Pago\")` }],
+    ["Boletos vencidos", { f: `COUNTIF(Boletos!J5:J${rows.length + 4},\"Vencido\")` }],
   ]);
   summarySheet["!merges"] = [XLSX.utils.decode_range("A1:B1")];
   summarySheet["!cols"] = [{ wch: 24 }, { wch: 18 }];

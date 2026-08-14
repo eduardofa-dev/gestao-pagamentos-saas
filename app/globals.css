@@ -209,6 +209,9 @@ tbody tr:last-child td { border-bottom: 0; }
 .supplier-cell strong { color: #344a52; font-size: 9px; }
 .supplier-cell small { color: #9aa4a8; font-size: 8px; margin-top: 3px; }
 .whatsapp-mini { min-height: 28px; display: flex; align-items: center; gap: 5px; border: 1px solid #d8ece4; border-radius: 7px; padding: 0 8px; background: #eff9f5; color: var(--green); font-size: 8px; font-weight: 700; cursor: pointer; }
+.row-actions { display: flex; align-items: center; justify-content: flex-end; gap: 5px; }
+.delete-row-button { width: 28px; height: 28px; display: grid; place-items: center; border: 1px solid #f0cbc7; border-radius: 7px; background: #fff7f6; color: #b64f43; cursor: pointer; }
+.delete-row-button:hover { border-color: #db8e85; background: #fde8e5; }
 
 .page-intro.inner h1 { font-size: 24px; }
 .summary-strip { display: grid; grid-template-columns: repeat(4, 1fr); margin-bottom: 14px; border: 1px solid var(--line); border-radius: 14px; background: #fff; }
@@ -456,9 +459,10 @@ tbody tr:last-child td { border-bottom: 0; }
 .detail-status { display: grid; grid-template-columns: 36px 1fr auto; align-items: center; gap: 10px; padding: 15px; margin: 22px 0 12px; border-radius: 12px; background: #f3f7f5; }
 .detail-status strong, .detail-status span { display: block; }
 .detail-status strong { font-size: 15px; }.detail-status span { color: #869399; font-size: 8px; margin-top: 4px; }
-.detail-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.detail-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .detail-actions button { min-height: 38px; display: flex; align-items: center; justify-content: center; gap: 6px; border: 1px solid #d8ece4; border-radius: 9px; background: #eff9f5; color: var(--green); font-size: 9px; font-weight: 700; cursor: pointer; }
 .detail-actions button:last-child { border-color: var(--line); background: #fff; color: #5b6e75; }
+.detail-actions button.danger-button { grid-column: 1 / -1; border-color: #f0cbc7; background: #fff7f6; color: #b64f43; }
 .protest-alert { display: grid; grid-template-columns: 38px 1fr; align-items: center; gap: 10px; padding: 13px; margin: 0 0 12px; border: 1px solid #edd6aa; border-radius: 11px; background: #fff9ed; }
 .protest-alert > span { width: 38px; height: 38px; display: grid; place-items: center; border-radius: 10px; background: #ffefcf; color: #aa7119; }
 .protest-alert small, .protest-alert strong, .protest-alert p { display: block; }

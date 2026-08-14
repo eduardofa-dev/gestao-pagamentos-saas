@@ -10,6 +10,7 @@ import {
 import {
   calculateCalendarDays,
   createLocalCheck,
+  deleteCheck,
   describeCheckDate,
   formatDateLong,
   insertCheck,
@@ -24,6 +25,7 @@ import {
   createBillPdfSignedUrl,
   createLocalBill,
   createWorkspace,
+  deleteBill,
   insertBill,
   loadBills,
   loadWorkspace,
@@ -41,9 +43,10 @@ import {
   type ProfileSettingsInput,
   type WorkspaceContext,
 } from "../lib/finance-data";
-import { parseBillPdfText } from "../lib/boleto-parser";
+import { formatCnpj, normalizeCnpj, parseBillPdfText } from "../lib/boleto-parser";
 import { readPdfText } from "../lib/pdf-reader";
 import { exportBillsToExcel } from "../lib/bill-export";
+import { moneyInputFromCents, parseBrazilianMoney } from "../lib/money-input";
 import {
   DEFAULT_REMINDER_TEMPLATE,
   formatWhatsAppPhone,
@@ -87,6 +90,7 @@ import {
   SlidersHorizontal,
   Sparkles,
   Upload,
+  Trash2,
   LogOut,
   UserRound,
   WalletCards,
@@ -345,7 +349,7 @@ export default function Home() {
   const visibleBills = useMemo(() => {
     const query = search.toLowerCase();
     return bills.filter((bill) => {
-      const matchesQuery = `${bill.supplier} ${bill.category} ${bill.company}`.toLowerCase().includes(query);
+      const matchesQuery = `${bill.supplier} ${bill.supplierTaxId} ${bill.category} ${bill.company}`.toLowerCase().includes(query);
       const matchesStatus = statusFilter === "Todos" || bill.status === statusFilter;
       return matchesQuery && matchesStatus;
     });
@@ -495,6 +499,41 @@ export default function Home() {
     }
   }
 
+  async function handleDeleteBill(bill: Bill) {
+    if (workspace.role !== "admin") {
+      showToast("Somente o administrador pode excluir boletos");
+      return;
+    }
+    if (!window.confirm(`Excluir definitivamente o boleto de ${bill.supplier}, no valor de ${bill.value}?`)) return;
+
+    try {
+      if (supabase && appState === "ready") await deleteBill(supabase, bill);
+      setBills((current) => current.filter((item) => item.id !== bill.id));
+      setDetailBill(null);
+      showToast("Boleto removido com sucesso");
+    } catch (error) {
+      console.error("Falha ao excluir boleto", error);
+      showToast("Não foi possível excluir o boleto");
+    }
+  }
+
+  async function handleDeleteCheck(check: CheckRecord) {
+    if (workspace.role !== "admin") {
+      showToast("Somente o administrador pode excluir cheques");
+      return;
+    }
+    if (!window.confirm(`Excluir definitivamente o cheque nº ${check.checkNumber}, no valor de ${check.value}?`)) return;
+
+    try {
+      if (supabase && appState === "ready") await deleteCheck(supabase, check.id);
+      setChecks((current) => current.filter((item) => item.id !== check.id));
+      showToast("Cheque removido com sucesso");
+    } catch (error) {
+      console.error("Falha ao excluir cheque", error);
+      showToast("Não foi possível excluir o cheque");
+    }
+  }
+
   async function saveFinanceSettings(input: FinanceContactInput) {
     if (workspace.role !== "admin") {
       showToast("Somente o administrador pode alterar o contato");
@@ -641,8 +680,8 @@ export default function Home() {
         <div className="content">
           {appState === "demo" && <div className="demo-banner"><AlertCircle size={16}/><span>Modo demonstração: configure o Supabase para ativar login e salvar os dados.</span></div>}
           {active === "dashboard" && <Dashboard bills={bills} userName={workspace.userName} onSeeBills={() => setActive("boletos")} onRemind={openReminder} onDetail={setDetailBill} />}
-          {active === "boletos" && <BillsPage bills={visibleBills} search={search} onSearch={setSearch} statusFilter={statusFilter} onFilter={setStatusFilter} onRemind={openReminder} onDetail={setDetailBill} onNew={openNewBill} />}
-          {active === "cheques" && <ChecksPage checks={checks} onNew={openNewCheck} onRemind={openCheckReminder} onCompensated={(check) => void handleCheckCompensated(check)} />}
+          {active === "boletos" && <BillsPage bills={visibleBills} search={search} onSearch={setSearch} statusFilter={statusFilter} onFilter={setStatusFilter} onRemind={openReminder} onDetail={setDetailBill} onNew={openNewBill} canDelete={workspace.role === "admin"} onDelete={(bill) => void handleDeleteBill(bill)} />}
+          {active === "cheques" && <ChecksPage checks={checks} onNew={openNewCheck} onRemind={openCheckReminder} onCompensated={(check) => void handleCheckCompensated(check)} canDelete={workspace.role === "admin"} onDelete={(check) => void handleDeleteCheck(check)} />}
           {active === "juros" && <InterestCalculatorPage />}
           {active === "lembretes" && <RemindersPage bills={bills} checks={checks} workspace={workspace} onRemind={() => bills[0] ? openReminder(bills[0]) : showToast("Cadastre um boleto antes de criar o lembrete")} onEditContact={() => setActive("configuracoes")} />}
           {active === "relatorios" && <ReportsPage bills={bills} workspace={workspace} />}
@@ -654,7 +693,7 @@ export default function Home() {
       {newCheckOpen && <NewCheckModal companies={workspace.companies} onClose={() => setNewCheckOpen(false)} onSave={saveCheck} />}
       {reminderBill && <ReminderModal bill={reminderBill} workspace={workspace} onClose={() => setReminderBill(null)} onSend={(message) => sendReminder(reminderBill, message)} />}
       {reminderCheck && <CheckReminderModal check={reminderCheck} workspace={workspace} onClose={() => setReminderCheck(null)} onSend={(message) => sendCheckReminder(reminderCheck, message)} />}
-      {detailBill && <BillDetail bill={detailBill} workspace={workspace} onClose={() => setDetailBill(null)} onRemind={() => { setDetailBill(null); openReminder(detailBill); }} onPaid={() => void handlePaid(detailBill)} onOpenPdf={() => void openBillPdf(detailBill)} />}
+      {detailBill && <BillDetail bill={detailBill} workspace={workspace} onClose={() => setDetailBill(null)} onRemind={() => { setDetailBill(null); openReminder(detailBill); }} onPaid={() => void handlePaid(detailBill)} onDelete={() => void handleDeleteBill(detailBill)} onOpenPdf={() => void openBillPdf(detailBill)} />}
       {toast && <div className="toast"><CheckCircle2 size={18} /><span>{toast}</span></div>}
     </main>
   );
@@ -721,16 +760,16 @@ function Dashboard({ bills, userName, onSeeBills, onRemind, onDetail }: { bills:
   );
 }
 
-function BillsTable({ rows, onRemind, onDetail, compact = false }: { rows: Bill[]; onRemind: (bill: Bill) => void; onDetail: (bill: Bill) => void; compact?: boolean }) {
+function BillsTable({ rows, onRemind, onDetail, onDelete, canDelete = false, compact = false }: { rows: Bill[]; onRemind: (bill: Bill) => void; onDetail: (bill: Bill) => void; onDelete?: (bill: Bill) => void; canDelete?: boolean; compact?: boolean }) {
   return (
     <div className="table-wrap">
-      <table><thead><tr><th>Fornecedor</th><th>Empresa / filial</th><th>Vencimento</th><th>Valor</th><th>Status</th><th><span className="sr-only">Ações</span></th></tr></thead><tbody>{rows.map((bill) => <tr key={bill.id} onClick={() => onDetail(bill)}><td><div className="supplier-cell"><span>{bill.initials}</span><div><strong>{bill.supplier}</strong><small>{bill.category}</small></div></div></td><td>{bill.company}</td><td>{bill.due}</td><td><strong>{bill.value}</strong></td><td><StatusBadge tone={bill.tone}>{bill.status}</StatusBadge></td><td onClick={(event) => event.stopPropagation()}>{bill.status !== "Pago" && <button className="whatsapp-mini" onClick={() => onRemind(bill)}><MessageCircle size={14}/>{compact ? "" : "Lembrar"}</button>}</td></tr>)}</tbody></table>
+      <table><thead><tr><th>Fornecedor</th><th>Empresa / filial</th><th>Vencimento</th><th>Valor</th><th>Status</th><th><span className="sr-only">Ações</span></th></tr></thead><tbody>{rows.map((bill) => <tr key={bill.id} onClick={() => onDetail(bill)}><td><div className="supplier-cell"><span>{bill.initials}</span><div><strong>{bill.supplier}</strong><small>{bill.category}</small></div></div></td><td>{bill.company}</td><td>{bill.due}</td><td><strong>{bill.value}</strong></td><td><StatusBadge tone={bill.tone}>{bill.status}</StatusBadge></td><td onClick={(event) => event.stopPropagation()}><div className="row-actions">{bill.status !== "Pago" && <button className="whatsapp-mini" onClick={() => onRemind(bill)}><MessageCircle size={14}/>{compact ? "" : "Lembrar"}</button>}{canDelete && !compact && onDelete && <button className="delete-row-button" onClick={() => onDelete(bill)} aria-label={`Excluir boleto de ${bill.supplier}`}><Trash2 size={14}/></button>}</div></td></tr>)}</tbody></table>
       {rows.length === 0 && <div className="empty-state"><Search size={28}/><h3>Nenhum boleto encontrado</h3><p>{compact ? "Cadastre o primeiro boleto para iniciar o acompanhamento." : "Tente buscar outro fornecedor ou status."}</p></div>}
     </div>
   );
 }
 
-function BillsPage({ bills, search, onSearch, statusFilter, onFilter, onRemind, onDetail, onNew }: { bills: Bill[]; search: string; onSearch: (value: string) => void; statusFilter: string; onFilter: (value: string) => void; onRemind: (bill: Bill) => void; onDetail: (bill: Bill) => void; onNew: () => void }) {
+function BillsPage({ bills, search, onSearch, statusFilter, onFilter, onRemind, onDetail, onNew, canDelete, onDelete }: { bills: Bill[]; search: string; onSearch: (value: string) => void; statusFilter: string; onFilter: (value: string) => void; onRemind: (bill: Bill) => void; onDetail: (bill: Bill) => void; onNew: () => void; canDelete: boolean; onDelete: (bill: Bill) => void }) {
   const pending = bills.filter((bill) => bill.databaseStatus === "pending");
   const dueTomorrow = bills.filter((bill) => calculateCalendarDays(bill.dueDate) === 1 && bill.databaseStatus !== "paid");
   const reminded = bills.filter((bill) => bill.databaseStatus === "reminder_sent");
@@ -739,12 +778,12 @@ function BillsPage({ bills, search, onSearch, statusFilter, onFilter, onRemind, 
     <>
       <section className="page-intro inner"><div><p>Controle financeiro</p><h1>Boletos</h1><h2>Cadastre, acompanhe vencimentos e avise o financeiro.</h2></div><div className="intro-actions"><button className="secondary-button"><Upload size={17}/> Importar planilha</button><button className="primary-button" onClick={onNew}><Plus size={17}/> Novo boleto</button></div></section>
       <section className="summary-strip"><div><span>Pendentes</span><strong>{pending.length}</strong></div><div><span>Vencem amanhã</span><strong>{dueTomorrow.length}</strong></div><div><span>Lembretes preparados</span><strong>{reminded.length}</strong></div><div className="danger-text"><span>Vencidos</span><strong>{overdue.length}</strong></div></section>
-      <section className="accounts-card"><div className="filter-row"><label className="search-box"><Search size={17}/><input value={search} onChange={(event) => onSearch(event.target.value)} placeholder="Buscar fornecedor, categoria..." /></label><label className="filter-select"><SlidersHorizontal size={16}/><select value={statusFilter} onChange={(event) => onFilter(event.target.value)}><option>Todos</option><option>Pendente</option><option>Vence amanhã</option><option>Vencido</option><option>Lembrete enviado</option></select><ChevronDown size={14}/></label><button className="filter-button"><Building2 size={16}/> Todas as empresas <ChevronDown size={14}/></button></div><BillsTable rows={bills} onRemind={onRemind} onDetail={onDetail} /><div className="pagination"><span>{bills.length ? `Mostrando ${bills.length} boleto${bills.length === 1 ? "" : "s"}` : "Nenhum boleto para mostrar"}</span><div><button disabled><ChevronLeft size={16}/></button><button className="current">1</button><button disabled><ChevronRight size={16}/></button></div></div></section>
+      <section className="accounts-card"><div className="filter-row"><label className="search-box"><Search size={17}/><input value={search} onChange={(event) => onSearch(event.target.value)} placeholder="Buscar fornecedor, CNPJ, categoria..." /></label><label className="filter-select"><SlidersHorizontal size={16}/><select value={statusFilter} onChange={(event) => onFilter(event.target.value)}><option>Todos</option><option>Pendente</option><option>Vence amanhã</option><option>Vencido</option><option>Lembrete enviado</option></select><ChevronDown size={14}/></label><button className="filter-button"><Building2 size={16}/> Todas as empresas <ChevronDown size={14}/></button></div><BillsTable rows={bills} onRemind={onRemind} onDetail={onDetail} canDelete={canDelete} onDelete={onDelete} /><div className="pagination"><span>{bills.length ? `Mostrando ${bills.length} boleto${bills.length === 1 ? "" : "s"}` : "Nenhum boleto para mostrar"}</span><div><button disabled><ChevronLeft size={16}/></button><button className="current">1</button><button disabled><ChevronRight size={16}/></button></div></div></section>
     </>
   );
 }
 
-function ChecksPage({ checks, onNew, onRemind, onCompensated }: { checks: CheckRecord[]; onNew: () => void; onRemind: (check: CheckRecord) => void; onCompensated: (check: CheckRecord) => void }) {
+function ChecksPage({ checks, onNew, onRemind, onCompensated, canDelete, onDelete }: { checks: CheckRecord[]; onNew: () => void; onRemind: (check: CheckRecord) => void; onCompensated: (check: CheckRecord) => void; canDelete: boolean; onDelete: (check: CheckRecord) => void }) {
   const [referenceDate, setReferenceDate] = useState(obterDataAtualISO());
   const [targetDate, setTargetDate] = useState(obterDataAtualISO());
   const daysBetween = calculateCalendarDays(targetDate, referenceDate);
@@ -770,7 +809,7 @@ function ChecksPage({ checks, onNew, onRemind, onCompensated }: { checks: CheckR
 
       <section className="accounts-card check-accounts-card">
         <div className="card-heading"><div><p>Agenda de compensação</p><h3>Cheques cadastrados</h3></div><span className="check-total">{formatarCentavosEmReal(activeChecks.reduce((total, check) => total + check.amountCents, 0))} em aberto</span></div>
-        <div className="table-wrap check-table"><table><thead><tr><th>Beneficiário</th><th>Banco / cheque</th><th>Empresa / filial</th><th>Compensação</th><th>Valor</th><th>Status</th><th><span className="sr-only">Ações</span></th></tr></thead><tbody>{checks.map((check) => <tr key={check.id}><td><div className="supplier-cell"><span>{check.initials}</span><div><strong>{check.beneficiary}</strong><small>Emitido em {formatDateLong(check.issueDate)}</small></div></div></td><td><strong>{check.bankName}</strong><small className="cell-subtitle">Cheque nº {check.checkNumber}</small></td><td>{check.company}</td><td><strong>{check.compensationDateShort}</strong><small className={`cell-subtitle ${check.daysUntil < 0 ? "danger-text" : ""}`}>{describeCheckDate(check.daysUntil)}</small></td><td><strong>{check.value}</strong></td><td><StatusBadge tone={check.tone}>{check.status}</StatusBadge></td><td><div className="check-actions">{check.databaseStatus !== "compensated" && <><button className="whatsapp-mini" onClick={() => onRemind(check)} aria-label={`Lembrar cheque ${check.checkNumber}`}><MessageCircle size={14}/> Lembrar</button><button className="complete-check" onClick={() => onCompensated(check)} aria-label={`Marcar cheque ${check.checkNumber} como compensado`}><Check size={14}/></button></>}</div></td></tr>)}</tbody></table></div>
+        <div className="table-wrap check-table"><table><thead><tr><th>Beneficiário</th><th>Banco / cheque</th><th>Empresa / filial</th><th>Compensação</th><th>Valor</th><th>Status</th><th><span className="sr-only">Ações</span></th></tr></thead><tbody>{checks.map((check) => <tr key={check.id}><td><div className="supplier-cell"><span>{check.initials}</span><div><strong>{check.beneficiary}</strong><small>Emitido em {formatDateLong(check.issueDate)}</small></div></div></td><td><strong>{check.bankName}</strong><small className="cell-subtitle">Cheque nº {check.checkNumber}</small></td><td>{check.company}</td><td><strong>{check.compensationDateShort}</strong><small className={`cell-subtitle ${check.daysUntil < 0 ? "danger-text" : ""}`}>{describeCheckDate(check.daysUntil)}</small></td><td><strong>{check.value}</strong></td><td><StatusBadge tone={check.tone}>{check.status}</StatusBadge></td><td><div className="check-actions">{check.databaseStatus !== "compensated" && <><button className="whatsapp-mini" onClick={() => onRemind(check)} aria-label={`Lembrar cheque ${check.checkNumber}`}><MessageCircle size={14}/> Lembrar</button><button className="complete-check" onClick={() => onCompensated(check)} aria-label={`Marcar cheque ${check.checkNumber} como compensado`}><Check size={14}/></button></>}{canDelete && <button className="delete-row-button" onClick={() => onDelete(check)} aria-label={`Excluir cheque ${check.checkNumber}`}><Trash2 size={14}/></button>}</div></td></tr>)}</tbody></table></div>
         {checks.length === 0 && <div className="empty-state"><Banknote size={28}/><h3>Nenhum cheque cadastrado</h3><p>Adicione o primeiro cheque para acompanhar a data de compensação.</p></div>}
       </section>
     </>
@@ -783,13 +822,14 @@ function NewCheckModal({ companies, onClose, onSave }: { companies: CompanyOptio
   const [branch, setBranch] = useState("");
   const [accountNumber, setAccountNumber] = useState("");
   const [checkNumber, setCheckNumber] = useState("");
-  const [amountReais, setAmountReais] = useState(0);
+  const [amountInput, setAmountInput] = useState("");
   const [issueDate, setIssueDate] = useState(obterDataAtualISO());
   const [compensationDate, setCompensationDate] = useState(obterDataAtualISO());
   const [reminderDays, setReminderDays] = useState(1);
   const [companyId, setCompanyId] = useState(companies[0]?.id ?? "");
   const [notes, setNotes] = useState("");
   const [saving, setSaving] = useState(false);
+  const amountReais = parseBrazilianMoney(amountInput);
   const validDateRange = Boolean(issueDate && compensationDate && calculateCalendarDays(compensationDate, issueDate) >= 0);
   const canSave = beneficiary.trim().length >= 2 && bankName.trim().length >= 2 && checkNumber.trim() && companyId && amountReais > 0 && validDateRange;
 
@@ -815,7 +855,7 @@ function NewCheckModal({ companies, onClose, onSave }: { companies: CompanyOptio
           <label><span>Número do cheque</span><input value={checkNumber} onChange={(event) => setCheckNumber(event.target.value)} placeholder="Ex.: 004816"/></label>
           <label><span>Agência</span><input value={branch} onChange={(event) => setBranch(event.target.value)} placeholder="Opcional"/></label>
           <label><span>Conta</span><input value={accountNumber} onChange={(event) => setAccountNumber(event.target.value)} placeholder="Opcional"/></label>
-          <label><span>Valor do cheque</span><div className="money-input"><b>R$</b><input aria-label="Valor do cheque" type="number" min="0.01" step="0.01" value={amountReais} onChange={(event) => setAmountReais(Math.max(0, Number(event.target.value) || 0))}/></div><small>Este valor será armazenado no histórico do cheque.</small></label>
+          <label><span>Valor do cheque</span><div className="money-input"><b>R$</b><input aria-label="Valor do cheque" type="text" inputMode="decimal" value={amountInput} onChange={(event) => setAmountInput(event.target.value)} placeholder="0,00"/></div><small>Digite diretamente, por exemplo: 1.250,75.</small></label>
           <label><span>Data de emissão</span><input type="date" value={issueDate} onChange={(event) => setIssueDate(event.target.value)}/></label>
           <label><span>Data prevista de compensação</span><input type="date" min={issueDate} value={compensationDate} onChange={(event) => setCompensationDate(event.target.value)}/>{!validDateRange && <small className="field-error">A compensação não pode ser anterior à emissão.</small>}</label>
           <label><span>Lembrar com antecedência</span><div className="suffix-input"><input aria-label="Dias de antecedência do cheque" type="number" min="0" max="90" value={reminderDays} onChange={(event) => setReminderDays(Math.min(90, Math.max(0, Number(event.target.value) || 0)))}/><small>{reminderDays === 1 ? "dia antes" : "dias antes"}</small></div></label>
@@ -1063,8 +1103,9 @@ function InterestCalculatorPage() {
 function NewBillModal({ companies, onClose, onSave }: { companies: CompanyOption[]; onClose: () => void; onSave: (input: NewBillInput) => Promise<void> | void }) {
   const [method, setMethod] = useState("upload");
   const [supplier, setSupplier] = useState("");
+  const [supplierTaxId, setSupplierTaxId] = useState("");
   const [category, setCategory] = useState("");
-  const [amountReais, setAmountReais] = useState(0);
+  const [amountInput, setAmountInput] = useState("");
   const [dueDate, setDueDate] = useState(obterDataAtualISO());
   const [companyId, setCompanyId] = useState(companies[0]?.id ?? "");
   const [barcode, setBarcode] = useState("");
@@ -1079,6 +1120,9 @@ function NewBillModal({ companies, onClose, onSave }: { companies: CompanyOption
   const [lateFeePercent, setLateFeePercent] = useState(2);
   const [monthlyInterestPercent, setMonthlyInterestPercent] = useState(1);
   const [saving, setSaving] = useState(false);
+  const amountReais = parseBrazilianMoney(amountInput);
+  const normalizedSupplierTaxId = normalizeCnpj(supplierTaxId);
+  const validSupplierTaxId = !normalizedSupplierTaxId || normalizedSupplierTaxId.length === 14;
 
   async function processPdf(file: File | undefined) {
     if (!file) return;
@@ -1102,10 +1146,11 @@ function NewBillModal({ companies, onClose, onSave }: { companies: CompanyOption
       const text = await readPdfText(fileBytes);
       const parsed = parseBillPdfText(text);
       if (parsed.supplier) setSupplier(parsed.supplier);
-      if (parsed.amountCents) setAmountReais(parsed.amountCents / 100);
+      if (parsed.supplierTaxId) setSupplierTaxId(formatCnpj(parsed.supplierTaxId));
+      if (parsed.amountCents) setAmountInput(moneyInputFromCents(parsed.amountCents));
       if (parsed.dueDate) setDueDate(parsed.dueDate);
       if (parsed.barcode) setBarcode(parsed.barcode);
-      const found = [parsed.supplier, parsed.amountCents, parsed.dueDate, parsed.barcode].filter(Boolean).length;
+      const found = [parsed.supplier, parsed.supplierTaxId, parsed.amountCents, parsed.dueDate, parsed.barcode].filter(Boolean).length;
       setPdfMessage(found ? `${file.name}: ${found} campos preenchidos automaticamente. Revise antes de salvar.` : `${file.name}: não encontramos campos reconhecíveis. Preencha os dados manualmente.`);
     } catch (error) {
       setPdfMessage(error instanceof Error ? error.message : "Não foi possível ler o PDF.");
@@ -1122,6 +1167,7 @@ function NewBillModal({ companies, onClose, onSave }: { companies: CompanyOption
     try {
       await onSave({
         supplier: supplier.trim(),
+        supplierTaxId: normalizedSupplierTaxId,
         category: category.trim() || "Outros",
         companyId: company.id,
         companyName: company.name,
@@ -1145,11 +1191,12 @@ function NewBillModal({ companies, onClose, onSave }: { companies: CompanyOption
       <section className="modal wide" onMouseDown={(event) => event.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="new-bill-title">
         <div className="modal-head"><div><small>NOVO LANÇAMENTO</small><h2 id="new-bill-title">Adicionar boleto</h2><p>Envie o arquivo ou preencha os dados manualmente.</p></div><button onClick={onClose} aria-label="Fechar"><X size={20}/></button></div>
         <div className="method-tabs"><button className={method === "upload" ? "active" : ""} onClick={() => setMethod("upload")}><Upload size={16}/> Enviar arquivo</button><button className={method === "manual" ? "active" : ""} onClick={() => setMethod("manual")}><FileText size={16}/> Cadastro manual</button></div>
-        {method === "upload" && <div className={`dropzone ${pdfFile ? "has-file" : ""}`} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); void processPdf(event.dataTransfer.files[0]); }}><span>{readingPdf ? <span className="loading-spinner"/> : pdfFile ? <CheckCircle2 size={25}/> : <Upload size={25}/>}</span><h3>{pdfFile ? pdfFile.name : "Arraste o boleto em PDF para cá"}</h3><p>PDF com até 10 MB • os campos serão lidos automaticamente</p><label className="dropzone-button">{readingPdf ? "Lendo..." : pdfFile ? "Trocar PDF" : "Selecionar PDF"}<input type="file" accept="application/pdf" disabled={readingPdf} onChange={(event) => void processPdf(event.target.files?.[0])}/></label><small className={pdfMessage.includes("não") || pdfMessage.includes("Não") ? "field-error" : "pdf-success"}>{pdfMessage || "Depois da leitura, revise fornecedor, valor, vencimento e código de barras."}</small></div>}
+        {method === "upload" && <div className={`dropzone ${pdfFile ? "has-file" : ""}`} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); void processPdf(event.dataTransfer.files[0]); }}><span>{readingPdf ? <span className="loading-spinner"/> : pdfFile ? <CheckCircle2 size={25}/> : <Upload size={25}/>}</span><h3>{pdfFile ? pdfFile.name : "Arraste o boleto em PDF para cá"}</h3><p>PDF com até 10 MB • os campos serão lidos automaticamente</p><label className="dropzone-button">{readingPdf ? "Lendo..." : pdfFile ? "Trocar PDF" : "Selecionar PDF"}<input type="file" accept="application/pdf" disabled={readingPdf} onChange={(event) => void processPdf(event.target.files?.[0])}/></label><small className={pdfMessage.includes("não") || pdfMessage.includes("Não") ? "field-error" : "pdf-success"}>{pdfMessage || "Depois da leitura, revise fornecedor, CNPJ, valor, vencimento e código de barras."}</small></div>}
         <div className="modal-form">
           <label><span>Fornecedor</span><input value={supplier} onChange={(event) => setSupplier(event.target.value)} placeholder="Nome do fornecedor" /></label>
+          <label><span>CNPJ do beneficiário</span><input value={supplierTaxId} onChange={(event) => setSupplierTaxId(formatCnpj(event.target.value))} placeholder="00.000.000/0000-00" inputMode="numeric" maxLength={18} />{!validSupplierTaxId && <small className="field-error">Digite os 14 números do CNPJ ou deixe o campo vazio.</small>}</label>
           <label><span>Categoria</span><input value={category} onChange={(event) => setCategory(event.target.value)} placeholder="Ex.: Serviços públicos" /></label>
-          <label><span>Valor</span><input aria-label="Valor do boleto" type="number" min="0.01" step="0.01" value={amountReais} onChange={(event) => setAmountReais(Math.max(0, Number(event.target.value) || 0))} /></label>
+          <label><span>Valor</span><input aria-label="Valor do boleto" type="text" inputMode="decimal" value={amountInput} onChange={(event) => setAmountInput(event.target.value)} placeholder="0,00" /><small>Digite diretamente, por exemplo: 1.250,75.</small></label>
           <label><span>Vencimento</span><input type="date" value={dueDate} onChange={(event) => setDueDate(event.target.value)} /></label>
           <label><span>Empresa / filial</span><select value={companyId} onChange={(event) => setCompanyId(event.target.value)}>{companies.map((company) => <option key={company.id} value={company.id}>{company.name}</option>)}</select></label>
           <label><span>Código de barras</span><input value={barcode} onChange={(event) => setBarcode(event.target.value)} placeholder="Opcional" /></label>
@@ -1165,7 +1212,7 @@ function NewBillModal({ companies, onClose, onSave }: { companies: CompanyOption
         </div>
 
         <div className={`protest-rule ${hasProtest ? "active" : ""}`}><span className="protest-icon"><Gavel size={20}/></span><div><strong>Prazo para entrar em protesto</strong><small>Informe quantos dias após o vencimento este boleto poderá ser protestado.</small></div><button type="button" className={`toggle ${hasProtest ? "active" : ""}`} aria-label="Ativar prazo para protesto" aria-pressed={hasProtest} onClick={() => setHasProtest(!hasProtest)}><i/></button>{hasProtest && <label><span>Dias após o vencimento</span><div><input aria-label="Dias após o vencimento" type="number" min="1" max="90" value={protestDays} onChange={(event) => setProtestDays(Math.max(1, Number(event.target.value)))} /><small>{protestDays === 1 ? "dia" : "dias"}</small></div></label>}</div>
-        <div className="modal-footer"><button className="secondary-button" onClick={onClose}>Cancelar</button><button className="primary-button" disabled={saving || readingPdf || !supplier.trim() || !companyId || !dueDate || amountReais <= 0} onClick={() => void handleSave()}><Check size={17}/> {saving ? "Salvando dados e PDF..." : "Salvar boleto"}</button></div>
+        <div className="modal-footer"><button className="secondary-button" onClick={onClose}>Cancelar</button><button className="primary-button" disabled={saving || readingPdf || !supplier.trim() || !companyId || !dueDate || amountReais <= 0 || !validSupplierTaxId} onClick={() => void handleSave()}><Check size={17}/> {saving ? "Salvando dados e PDF..." : "Salvar boleto"}</button></div>
       </section>
     </div>
   );
@@ -1206,7 +1253,7 @@ function ReminderModal({ bill, workspace, onClose, onSend }: { bill: Bill; works
   );
 }
 
-function BillDetail({ bill, workspace, onClose, onRemind, onPaid, onOpenPdf }: { bill: Bill; workspace: WorkspaceContext; onClose: () => void; onRemind: () => void; onPaid: () => void; onOpenPdf: () => void }) {
+function BillDetail({ bill, workspace, onClose, onRemind, onPaid, onDelete, onOpenPdf }: { bill: Bill; workspace: WorkspaceContext; onClose: () => void; onRemind: () => void; onPaid: () => void; onDelete: () => void; onOpenPdf: () => void }) {
   const calculation = calcularEncargosDoBoleto(bill);
 
   return (
@@ -1222,8 +1269,8 @@ function BillDetail({ bill, workspace, onClose, onRemind, onPaid, onOpenPdf }: {
         </div>}
 
         {bill.protestDays && <div className="protest-alert"><span><Gavel size={19}/></span><div><small>PRAZO PARA PROTESTO</small><strong>{bill.protestDays} {bill.protestDays === 1 ? "dia" : "dias"} após o vencimento</strong><p>O financeiro será avisado sobre este prazo no lembrete.</p></div></div>}
-        <div className="detail-actions"><button onClick={onRemind}><MessageCircle size={17}/> Lembrar no WhatsApp</button>{bill.databaseStatus !== "paid" && <button onClick={onPaid}><CheckCircle2 size={17}/> Marcar como pago</button>}</div>
-        <section className="detail-section"><h3>Informações</h3><dl><div><dt>Empresa / filial</dt><dd>{bill.company}</dd></div><div><dt>Categoria</dt><dd>{bill.category}</dd></div><div><dt>Centro de custo</dt><dd>{bill.costCenter || "Não informado"}</dd></div><div><dt>Fornecedor</dt><dd>{bill.supplier}</dd></div><div><dt>Multa por atraso</dt><dd>{bill.lateFeePercent.toLocaleString("pt-BR")}% uma vez</dd></div><div><dt>Juros simples</dt><dd>{bill.monthlyInterestPercent.toLocaleString("pt-BR")}% ao mês</dd></div><div><dt>Prazo para protesto</dt><dd>{bill.protestDays ? `${bill.protestDays} ${bill.protestDays === 1 ? "dia" : "dias"} após o vencimento` : "Sem prazo informado"}</dd></div><div><dt>Código de barras</dt><dd className="barcode">{bill.barcode || "Não informado"}</dd></div><div><dt>Observações</dt><dd>{bill.notes || "Nenhuma observação"}</dd></div></dl></section>
+        <div className="detail-actions"><button onClick={onRemind}><MessageCircle size={17}/> Lembrar no WhatsApp</button>{bill.databaseStatus !== "paid" && <button onClick={onPaid}><CheckCircle2 size={17}/> Marcar como pago</button>}{workspace.role === "admin" && <button className="danger-button" onClick={onDelete}><Trash2 size={17}/> Excluir boleto</button>}</div>
+        <section className="detail-section"><h3>Informações</h3><dl><div><dt>Empresa / filial</dt><dd>{bill.company}</dd></div><div><dt>Categoria</dt><dd>{bill.category}</dd></div><div><dt>Centro de custo</dt><dd>{bill.costCenter || "Não informado"}</dd></div><div><dt>Fornecedor</dt><dd>{bill.supplier}</dd></div><div><dt>CNPJ do beneficiário</dt><dd>{bill.supplierTaxId ? formatCnpj(bill.supplierTaxId) : "Não informado"}</dd></div><div><dt>Multa por atraso</dt><dd>{bill.lateFeePercent.toLocaleString("pt-BR")}% uma vez</dd></div><div><dt>Juros simples</dt><dd>{bill.monthlyInterestPercent.toLocaleString("pt-BR")}% ao mês</dd></div><div><dt>Prazo para protesto</dt><dd>{bill.protestDays ? `${bill.protestDays} ${bill.protestDays === 1 ? "dia" : "dias"} após o vencimento` : "Sem prazo informado"}</dd></div><div><dt>Código de barras</dt><dd className="barcode">{bill.barcode || "Não informado"}</dd></div><div><dt>Observações</dt><dd>{bill.notes || "Nenhuma observação"}</dd></div></dl></section>
         <section className={`document-box ${bill.attachmentPath ? "has-document" : ""}`}><FileText size={22}/><div><strong>{bill.attachmentPath ? "PDF do boleto anexado" : "Nenhum arquivo anexado"}</strong><small>{bill.attachmentPath ? "Arquivo armazenado com acesso protegido." : "Anexe um PDF no cadastro para consultá-lo aqui."}</small></div>{bill.attachmentPath && <button onClick={onOpenPdf} aria-label="Abrir PDF do boleto"><Download size={17}/></button>}</section>
         <section className="timeline"><h3>Histórico</h3><div><i className="done"><Check size={11}/></i><p><strong>Boleto cadastrado</strong><span>Por {workspace.userName}</span></p></div>{bill.status === "Lembrete enviado" && <div><i className="done"><Send size={11}/></i><p><strong>Lembrete preparado no WhatsApp</strong><span>Para {workspace.financeContactName || "o responsável financeiro"}</span></p></div>}<div><i><Clock3 size={11}/></i><p><strong>{bill.databaseStatus === "paid" ? "Pagamento concluído" : "Aguardando pagamento"}</strong><span>Responsável: Financeiro</span></p></div></section>
       </aside>

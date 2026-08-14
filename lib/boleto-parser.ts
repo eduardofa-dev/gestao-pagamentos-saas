@@ -1,9 +1,22 @@
 export type ParsedBillPdf = {
   supplier: string;
+  supplierTaxId: string;
   amountCents: number | null;
   dueDate: string;
   barcode: string;
 };
+
+export function normalizeCnpj(value: string) {
+  return value.replace(/\D/g, "").slice(0, 14);
+}
+
+export function formatCnpj(value: string) {
+  return normalizeCnpj(value)
+    .replace(/^(\d{2})(\d)/, "$1.$2")
+    .replace(/^(\d{2})\.(\d{3})(\d)/, "$1.$2.$3")
+    .replace(/\.(\d{3})(\d)/, ".$1/$2")
+    .replace(/(\d{4})(\d)/, "$1-$2");
+}
 
 function brazilianDateToIso(value: string) {
   const [day, month, year] = value.split(/[./-]/).map(Number);
@@ -42,6 +55,12 @@ export function parseBillPdfText(text: string): ParsedBillPdf {
     "benefici[aá]rio|cedente|favorecido",
     "([^\\n]{2,120})",
   ).replace(/\s{2,}.*/, "").trim();
+  const labeledCnpj = labeledMatch(
+    normalized,
+    "cnpj(?:\\s+do)?\\s+(?:benefici[aá]rio|cedente|favorecido)|(?:benefici[aá]rio|cedente|favorecido)\\s*(?:-|–)?\\s*cnpj(?:\\/cpf)?",
+    "[^0-9]{0,30}(\\d{2}[.]?\\d{3}[.]?\\d{3}\\/?\\d{4}-?\\d{2})",
+  );
+  const firstCnpj = normalized.match(/\b\d{2}[.]?\d{3}[.]?\d{3}\/?\d{4}-?\d{2}\b/)?.[0] ?? "";
 
   const barcodeCandidates = normalized
     .split("\n")
@@ -52,6 +71,7 @@ export function parseBillPdfText(text: string): ParsedBillPdf {
 
   return {
     supplier,
+    supplierTaxId: normalizeCnpj(labeledCnpj || firstCnpj),
     amountCents: amountText ? brazilianMoneyToCents(amountText) : null,
     dueDate: dueDateText ? brazilianDateToIso(dueDateText) : "",
     barcode,

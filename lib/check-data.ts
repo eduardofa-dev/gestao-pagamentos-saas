@@ -220,6 +220,11 @@ export async function markCheckCompensated(supabase: SupabaseClient, checkId: st
   if (error) throw error;
 }
 
+export async function deleteCheck(supabase: SupabaseClient, checkId: string) {
+  const { error } = await supabase.from("checks").delete().eq("id", checkId);
+  if (error) throw error;
+}
+
 export async function persistCheckReminder(
   supabase: SupabaseClient,
   workspace: WorkspaceContext,

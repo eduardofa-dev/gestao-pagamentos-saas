@@ -11,6 +11,7 @@ export type CompanyOption = {
 export type Bill = {
   id: string;
   supplier: string;
+  supplierTaxId: string;
   category: string;
   company: string;
   companyId: string;
@@ -37,6 +38,7 @@ export type Bill = {
 
 export type NewBillInput = {
   supplier: string;
+  supplierTaxId: string;
   category: string;
   companyId: string;
   companyName: string;
@@ -80,6 +82,7 @@ export type ProfileSettingsInput = {
 type DatabaseBill = {
   id: string;
   supplier: string;
+  supplier_tax_id: string | null;
   category: string;
   company_id: string;
   amount_cents: number | string;
@@ -173,6 +176,7 @@ function mapDatabaseBill(row: DatabaseBill): Bill {
   return {
     id: row.id,
     supplier: row.supplier,
+    supplierTaxId: row.supplier_tax_id ?? "",
     category: row.category,
     company,
     companyId: row.company_id,
@@ -202,6 +206,7 @@ export function createLocalBill(input: NewBillInput): Bill {
   return mapDatabaseBill({
     id: createLocalId("bill"),
     supplier: input.supplier,
+    supplier_tax_id: input.supplierTaxId || null,
     category: input.category,
     company_id: input.companyId,
     companies: { name: input.companyName },
@@ -352,7 +357,7 @@ export async function updateProfileSettings(
 export async function loadBills(supabase: SupabaseClient, groupId: string) {
   const { data, error } = await supabase
     .from("bills")
-    .select("id, supplier, category, company_id, amount_cents, due_date, status, late_fee_bps, monthly_interest_bps, protest_days, barcode, cost_center, notes, approval_status, paid_at, created_at, attachment_path, companies(name)")
+    .select("id, supplier, supplier_tax_id, category, company_id, amount_cents, due_date, status, late_fee_bps, monthly_interest_bps, protest_days, barcode, cost_center, notes, approval_status, paid_at, created_at, attachment_path, companies(name)")
     .eq("group_id", groupId)
     .order("due_date", { ascending: true });
 
@@ -383,6 +388,7 @@ export async function insertBill(
       group_id: workspace.groupId,
       company_id: input.companyId,
       supplier: input.supplier,
+      supplier_tax_id: input.supplierTaxId || null,
       category: input.category,
       amount_cents: input.amountCents,
       due_date: input.dueDate,
@@ -394,7 +400,7 @@ export async function insertBill(
       notes: input.notes || null,
       created_by: workspace.userId,
     })
-    .select("id, supplier, category, company_id, amount_cents, due_date, status, late_fee_bps, monthly_interest_bps, protest_days, barcode, cost_center, notes, approval_status, paid_at, created_at, attachment_path, companies(name)")
+    .select("id, supplier, supplier_tax_id, category, company_id, amount_cents, due_date, status, late_fee_bps, monthly_interest_bps, protest_days, barcode, cost_center, notes, approval_status, paid_at, created_at, attachment_path, companies(name)")
     .single();
 
   if (error) throw error;
@@ -437,6 +443,16 @@ export async function markBillPaid(supabase: SupabaseClient, billId: string) {
     .update({ status: "paid", paid_at: new Date().toISOString() })
     .eq("id", billId);
   if (error) throw error;
+}
+
+export async function deleteBill(supabase: SupabaseClient, bill: Bill) {
+  const { error } = await supabase.from("bills").delete().eq("id", bill.id);
+  if (error) throw error;
+
+  if (bill.attachmentPath && !bill.attachmentPath.startsWith("local:")) {
+    const { error: storageError } = await supabase.storage.from("bill-documents").remove([bill.attachmentPath]);
+    if (storageError) console.warn("Boleto excluído, mas o PDF não pôde ser removido", storageError);
+  }
 }
 
 export async function persistReminder(
