@@ -47,4 +47,7 @@ administrador também pode alterar o nome do grupo. Em **Relatórios**, o botão
 **Exportar Excel** gera uma planilha com todos os campos dos boletos ordenados
 pela data de vencimento, incluindo o CNPJ do beneficiário. Valores de boletos e
 cheques podem ser digitados diretamente no formato brasileiro, como `1.250,75`.
-O administrador pode excluir registros de boletos e cheques após confirmar a ação.
+Os boletos aparecem agrupados pela data de vencimento. Administradores e usuários
+do financeiro podem editar todos os dados dos cheques já cadastrados, inclusive o
+valor; o administrador pode excluir registros após confirmar a ação. A tipografia
+da interface foi ampliada para facilitar a leitura.

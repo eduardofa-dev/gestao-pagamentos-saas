@@ -169,6 +169,25 @@ export function createLocalCheck(input: NewCheckInput): CheckRecord {
   });
 }
 
+export function updateLocalCheck(check: CheckRecord, input: NewCheckInput): CheckRecord {
+  return mapDatabaseCheck({
+    id: check.id,
+    beneficiary: input.beneficiary,
+    bank_name: input.bankName,
+    branch: input.branch || null,
+    account_number: input.accountNumber || null,
+    check_number: input.checkNumber,
+    company_id: input.companyId,
+    companies: { name: input.companyName },
+    amount_cents: input.amountCents,
+    issue_date: input.issueDate,
+    compensation_date: input.compensationDate,
+    reminder_days: input.reminderDays,
+    status: check.databaseStatus,
+    notes: input.notes || null,
+  });
+}
+
 export function withCheckStatus(check: CheckRecord, databaseStatus: CheckDatabaseStatus): CheckRecord {
   const presentation = statusPresentation(databaseStatus, check.daysUntil, check.reminderDays);
   return { ...check, databaseStatus, status: presentation.status, tone: presentation.tone };
@@ -206,6 +225,33 @@ export async function insertCheck(
       notes: input.notes || null,
       created_by: workspace.userId,
     })
+    .select("id, beneficiary, bank_name, branch, account_number, check_number, company_id, amount_cents, issue_date, compensation_date, reminder_days, status, notes, companies(name)")
+    .single();
+  if (error) throw error;
+  return mapDatabaseCheck(data as unknown as DatabaseCheck);
+}
+
+export async function updateCheck(
+  supabase: SupabaseClient,
+  checkId: string,
+  input: NewCheckInput,
+) {
+  const { data, error } = await supabase
+    .from("checks")
+    .update({
+      company_id: input.companyId,
+      beneficiary: input.beneficiary,
+      bank_name: input.bankName,
+      branch: input.branch || null,
+      account_number: input.accountNumber || null,
+      check_number: input.checkNumber,
+      amount_cents: input.amountCents,
+      issue_date: input.issueDate,
+      compensation_date: input.compensationDate,
+      reminder_days: input.reminderDays,
+      notes: input.notes || null,
+    })
+    .eq("id", checkId)
     .select("id, beneficiary, bank_name, branch, account_number, check_number, company_id, amount_cents, issue_date, compensation_date, reminder_days, status, notes, companies(name)")
     .single();
   if (error) throw error;

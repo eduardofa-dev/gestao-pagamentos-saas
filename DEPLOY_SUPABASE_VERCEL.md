@@ -122,6 +122,8 @@ Depois do deploy, atualize a **Site URL** e as **Redirect URLs** no Supabase com
 - Juros mensais são armazenados em pontos-base: `100 = 1% ao mês`.
 - O valor com juros é uma estimativa. O valor oficial deve ser confirmado com o banco ou emissor.
 - O valor de cada cheque é armazenado em centavos no banco, junto com número, banco, empresa, datas e observações.
+- Administradores e financeiros podem editar cheques já cadastrados, inclusive substituir o valor completo.
+- Na página de boletos, os registros são separados e ordenados pela data de vencimento.
 - As datas dos cheques são calculadas em dias corridos. O WhatsApp só é aberto após uma ação do administrador e a mensagem precisa ser confirmada manualmente.
 - Os PDFs dos boletos ficam em um bucket privado e são abertos com uma URL temporária de cinco minutos.
 - A exportação em Excel inclui um resumo e uma aba com os boletos ordenados por vencimento, contendo CNPJ do beneficiário, valores, datas, encargos, protesto, centro de custo, aprovação e demais campos cadastrados.
